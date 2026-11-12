@@ -18,3 +18,8 @@ bin/
 gen/
 out/
 *.log
+# Release signing material — never committed. CI writes keystore.properties from secrets.
+keystore.properties
+*.jks
+*.keystore
+translator-release.*
