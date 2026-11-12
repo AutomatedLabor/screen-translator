@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Light theme -->
+    <color name="md_theme_light_primary">#1B6B3A</color>
+    <color name="md_theme_light_onPrimary">#FFFFFF</color>
+    <color name="md_theme_light_primaryContainer">#A5E9B5</color>
+    <color name="md_theme_light_secondary">#4A6354</color>
+    <color name="md_theme_light_background">#FAFBF7</color>
+    <color name="md_theme_light_surface">#FFFFFF</color>
+    <color name="md_theme_light_onSurface">#1A1C19</color>
+    <color name="md_theme_light_surfaceVariant">#DFE4D8</color>
+    <color name="md_theme_light_outline">#6F7A66</color>
+
+    <!-- Dark theme -->
+    <color name="md_theme_dark_primary">#8DD09C</color>
+    <color name="md_theme_dark_onPrimary">#003919</color>
+    <color name="md_theme_dark_primaryContainer">#00522A</color>
+    <color name="md_theme_dark_secondary">#B6CCB4</color>
+    <color name="md_theme_dark_background">#11140F</color>
+    <color name="md_theme_dark_surface">#131611</color>
+    <color name="md_theme_dark_onSurface">#E2E3DD</color>
+    <color name="md_theme_dark_surfaceVariant">#43483E</color>
+    <color name="md_theme_dark_outline">#8B9384</color>
+
+    <!-- Overlay translation card background -->
+    <color name="overlay_card_bg_light">#F5F5F0</color>
+    <color name="overlay_card_bg_dark">#2A2D26</color>
+</resources>

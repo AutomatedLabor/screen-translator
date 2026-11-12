@@ -1,0 +1,302 @@
+package com.translator.screen.service
+
+import android.content.Context
+import android.content.res.Configuration
+import android.graphics.Canvas
+import android.graphics.Color
+import android.graphics.Paint
+import android.graphics.PixelFormat
+import android.graphics.RectF
+import android.text.StaticLayout
+import android.text.TextPaint
+import android.os.Handler
+import android.os.Looper
+import android.util.Log
+import android.view.Gravity
+import android.view.MotionEvent
+import android.view.View
+import android.view.WindowManager
+import android.view.WindowManager.LayoutParams
+import com.translator.screen.extract.TranslatedTextRegion
+
+/**
+ * Owns two [WindowManager] windows:
+ *  1. A full-screen, non-touchable [TranslationCardView] that paints every
+ *     [TranslatedTextRegion] as a rounded card with auto-fit translated text.
+ *  2. A small tappable [CloseButtonView] anchored to the top-end corner that
+ *     routes taps to [onCloseRequested].
+ *
+ * Both windows use [LayoutParams.TYPE_ACCESSIBILITY_OVERLAY] so they may be
+ * added without the SYSTEM_ALERT_WINDOW permission when the host accessibility
+ * service is enabled.
+ */
+class OverlayManager(
+    private val context: Context,
+    private val onCloseRequested: () -> Unit,
+) {
+
+    private val tag = "OverlayManager"
+
+    private val windowManager =
+        context.getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+    private val mainHandler = Handler(Looper.getMainLooper())
+
+    private val density = context.resources.displayMetrics.density
+    private val Int.dp: Int get() = (this * density + 0.5f).toInt()
+    private val Int.sp: Float get() = this * density
+    private val screenWidth: Int get() = context.resources.displayMetrics.widthPixels
+    private val screenHeight: Int get() = context.resources.displayMetrics.heightPixels
+
+    private var translationView: TranslationCardView? = null
+    private var closeView: CloseButtonView? = null
+    private var translationParams: LayoutParams? = null
+    private var closeParams: LayoutParams? = null
+
+    private val darkTheme: Boolean
+        get() =
+            (context.resources.configuration.uiMode and Configuration.UI_MODE_NIGHT_MASK) ==
+                Configuration.UI_MODE_NIGHT_YES
+
+    /** Show (or replace) overlay with the given translated regions. Auto-dismisses any previous content first. */
+    fun show(regions: List<TranslatedTextRegion>) {
+        Log.d(tag, "show regions=${regions.size}")
+        mainHandler.post {
+            if (isShowing) dismissInternal()
+            try {
+                val tv = TranslationCardView(context, regions, darkTheme)
+                val cv = CloseButtonView(context)
+                val tp = buildTranslationParams()
+                val cp = buildCloseParams()
+                try {
+                    windowManager.addView(tv, tp)
+                } catch (e: WindowManager.BadTokenException) {
+                    Log.e(tag, "BadTokenException adding translation overlay", e)
+                    return@post
+                }
+                try {
+                    windowManager.addView(cv, cp)
+                } catch (e: WindowManager.BadTokenException) {
+                    Log.e(tag, "BadTokenException adding close button overlay", e)
+                    try {
+                        windowManager.removeView(tv)
+                    } catch (_: IllegalArgumentException) {
+                        // Already detached; safe to ignore.
+                    }
+                    return@post
+                }
+                translationView = tv
+                closeView = cv
+                translationParams = tp
+                closeParams = cp
+            } catch (t: Throwable) {
+                Log.e(tag, "Unexpected failure in show()", t)
+            }
+        }
+    }
+
+    /** Remove both windows from the WindowManager. No-op if not shown. */
+    fun dismiss() {
+        Log.d(tag, "dismiss")
+        mainHandler.post { dismissInternal() }
+    }
+
+    /** True iff at least the primary translation window is attached. */
+    val isShowing: Boolean
+        get() = translationView != null
+
+    private fun dismissInternal() {
+        translationView?.let { v ->
+            try {
+                windowManager.removeView(v)
+            } catch (_: IllegalArgumentException) {
+                // View was not attached / already removed; safe to ignore.
+            }
+        }
+        translationView = null
+        closeView?.let { v ->
+            try {
+                windowManager.removeView(v)
+            } catch (_: IllegalArgumentException) {
+                // View was not attached / already removed; safe to ignore.
+            }
+        }
+        closeView = null
+        translationParams = null
+        closeParams = null
+    }
+
+    private fun buildTranslationParams(): LayoutParams =
+        LayoutParams().apply {
+            type = LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            format = PixelFormat.TRANSLUCENT
+            flags = (
+                LayoutParams.FLAG_NOT_FOCUSABLE or
+                    LayoutParams.FLAG_NOT_TOUCHABLE or
+                    LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                    LayoutParams.FLAG_LAYOUT_NO_LIMITS
+                )
+            width = LayoutParams.MATCH_PARENT
+            height = LayoutParams.MATCH_PARENT
+            gravity = Gravity.TOP or Gravity.START
+            x = 0
+            y = 0
+            layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            setTitle("ScreenTranslatorOverlay")
+        }
+
+    private fun buildCloseParams(): LayoutParams {
+        val size = 48.dp
+        return LayoutParams().apply {
+            type = LayoutParams.TYPE_ACCESSIBILITY_OVERLAY
+            format = PixelFormat.TRANSLUCENT
+            flags = LayoutParams.FLAG_NOT_FOCUSABLE
+            width = size
+            height = size
+            gravity = Gravity.TOP or Gravity.END
+            x = 0
+            y = 0
+        }
+    }
+
+    /**
+     * Single full-screen view that draws every translation card on one canvas.
+     * Hosted in the non-touchable primary overlay window.
+     */
+    private inner class TranslationCardView(
+        context: Context,
+        private val regions: List<TranslatedTextRegion>,
+        private val darkTheme: Boolean,
+    ) : View(context) {
+
+        private val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+        }
+        private val textPaint = TextPaint(Paint.ANTI_ALIAS_FLAG)
+
+        private val cornerRadius = 12.dp.toFloat()
+        private val pad8 = 8.dp.toFloat()
+        private val pad6 = 6.dp.toFloat()
+        private val pad12 = 12.dp.toFloat()
+        private val pad16 = 16.dp.toFloat()
+        private val minTextSizePx = 10.sp
+        private val maxTextSizePx = 48.sp
+
+        private val cardRect = RectF()
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            setMeasuredDimension(screenWidth, screenHeight)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            cardPaint.color = (if (darkTheme) 0xF0222422L else 0xF0FFFFFFL).toInt()
+            textPaint.color = (if (darkTheme) 0xFFFFFFFFL else 0xFF1A1C19L).toInt()
+
+            for (region in regions) {
+                val text = region.translated.trim()
+                if (text.isEmpty()) continue
+                val b = region.bounds
+                if (b.isEmpty) continue
+
+                cardRect.set(
+                    b.left.toFloat(),
+                    b.top.toFloat(),
+                    b.right.toFloat(),
+                    b.bottom.toFloat(),
+                )
+                canvas.drawRoundRect(cardRect, cornerRadius, cornerRadius, cardPaint)
+
+                val availW = (b.width.toFloat() - pad16).coerceAtLeast(1f)
+                val availH = (b.height.toFloat() - pad12).coerceAtLeast(1f)
+                if (availW <= 1f || availH <= 1f) continue
+
+                val layout = autoFitLayout(text, availW, availH)
+                canvas.save()
+                canvas.translate(b.left + pad8, b.top + pad6)
+                layout.draw(canvas)
+                canvas.restore()
+            }
+        }
+
+        /**
+         * Starts at min(availH, 48sp) and shrinks by 1px until both the layout
+         * height fits within [availH] and every line fits within [availW],
+         * stopping at 10sp.
+         */
+        private fun autoFitLayout(text: String, availW: Float, availH: Float): StaticLayout {
+            val maxWidthPx = availW.toInt().coerceAtLeast(1)
+            var textSize = minOf(availH, maxTextSizePx)
+            if (textSize < minTextSizePx) textSize = minTextSizePx
+            var layout = buildLayout(text, textSize, maxWidthPx)
+            while (
+                textSize > minTextSizePx &&
+                (layout.height > availH || maxLineWidth(layout) > availW)
+            ) {
+                textSize -= 1f
+                if (textSize < minTextSizePx) textSize = minTextSizePx
+                layout = buildLayout(text, textSize, maxWidthPx)
+                if (textSize == minTextSizePx) break
+            }
+            return layout
+        }
+
+        private fun buildLayout(text: String, size: Float, widthPx: Int): StaticLayout {
+            textPaint.textSize = size
+            return StaticLayout.Builder.obtain(text, 0, text.length, textPaint, widthPx)
+                .setAlignment(android.text.Layout.Alignment.ALIGN_NORMAL)
+                .setLineSpacing(0f, 1f)
+                .setIncludePad(false)
+                .build()
+        }
+
+        private fun maxLineWidth(layout: StaticLayout): Float {
+            var w = 0f
+            for (i in 0 until layout.lineCount) {
+                w = maxOf(w, layout.getLineWidth(i))
+            }
+            return w
+        }
+    }
+
+    /**
+     * A 48dp circular close button. Hosted in its own tappable overlay window
+     * (FLAG_NOT_FOCUSABLE only — touch events reach this view).
+     */
+    private inner class CloseButtonView(context: Context) : View(context) {
+
+        private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.FILL
+            color = 0xCC1B6B3A.toInt()
+        }
+        private val xPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
+            style = Paint.Style.STROKE
+            color = Color.WHITE
+            strokeWidth = 3.dp.toFloat()
+            strokeCap = Paint.Cap.ROUND
+        }
+
+        private val c12 = 12.dp.toFloat()
+        private val c24 = 24.dp.toFloat()
+        private val c36 = 36.dp.toFloat()
+
+        override fun onMeasure(widthMeasureSpec: Int, heightMeasureSpec: Int) {
+            setMeasuredDimension(48.dp, 48.dp)
+        }
+
+        override fun onDraw(canvas: Canvas) {
+            super.onDraw(canvas)
+            canvas.drawCircle(c24, c24, c24, bgPaint)
+            canvas.drawLine(c12, c12, c36, c36, xPaint)
+            canvas.drawLine(c36, c12, c12, c36, xPaint)
+        }
+
+        override fun onTouchEvent(event: MotionEvent): Boolean {
+            if (event.action == MotionEvent.ACTION_UP) {
+                onCloseRequested()
+            }
+            // Consume every event so the overlay keeps receiving the gesture stream.
+            return true
+        }
+    }
+}

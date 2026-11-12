@@ -1,0 +1,266 @@
+package com.translator.screen.service
+
+import android.accessibilityservice.AccessibilityService
+import android.content.ComponentName
+import android.os.SystemClock
+import android.util.Log
+import android.view.accessibility.AccessibilityEvent
+import android.view.accessibility.AccessibilityWindowInfo
+import com.translator.screen.extract.IScreenTextExtractor
+import com.translator.screen.extract.ScreenTextExtractor
+import com.translator.screen.extract.TranslatedTextRegion
+import com.translator.screen.translate.ITranslationEngine
+import com.translator.screen.translate.MlKitTranslationEngine
+import com.translator.screen.util.PackageUtils
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+
+/**
+ * Accessibility service that drives the screen-translation pipeline.
+ *
+ * Lifecycle:
+ *  - [onServiceConnected] publishes the singleton [instance], constructs the
+ *    translation engine and overlay manager, and warms up ML Kit.
+ *  - [onDestroy] tears everything down and clears [instance].
+ *
+ * Two entry points trigger work:
+ *  - [QuickTileService.onClick] calls [triggerTranslation] to snapshot the
+ *    current application window, translate its text regions, and show the
+ *    overlay.
+ *  - [onAccessibilityEvent] auto-dismisses the overlay when the user scrolls
+ *    inside the translated app or surfaces a new top-level window.
+ *
+ * The class publishes a small public API ([instance], [isReady],
+ * [isOverlayShowing], [triggerTranslation], [dismissOverlayPublic]) so the
+ * Quick Settings tile can synchronously inspect and drive the service without
+ * binding to it.
+ */
+class TranslatorAccessibilityService : AccessibilityService() {
+
+    private var engine: ITranslationEngine? = null
+    private var extractor: IScreenTextExtractor = ScreenTextExtractor()
+    private var overlayManager: OverlayManager? = null
+    private val serviceScope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
+
+    @Volatile
+    private var overlayShownTimestampMs: Long = 0L
+
+    @Volatile
+    private var lastTranslatedTargetPackage: String? = null
+
+    @Volatile
+    private var isLocked: Boolean = false
+
+    // -------------------------------------------------------------------------
+    // AccessibilityService lifecycle
+    // -------------------------------------------------------------------------
+
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        instance = this
+        engine = MlKitTranslationEngine().also { it.warmup() }
+        overlayManager = OverlayManager(applicationContext) { onOverlayCloseRequested() }
+        Log.i(TAG, "Service connected, engine warmed up")
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        engine?.close()
+        engine = null
+        overlayManager?.dismiss()
+        overlayManager = null
+        serviceScope.cancel()
+        instance = null
+        Log.i(TAG, "Service destroyed")
+    }
+
+    override fun onAccessibilityEvent(event: AccessibilityEvent?) {
+        if (event == null) return
+        val pkg = event.packageName?.toString()
+        // Ignore events from our own package (overlay interactions, service UI).
+        if (pkg == packageName?.toString()) return
+        // Ignore SystemUI shade / status-bar events to avoid noise.
+        if (pkg == "com.android.systemui") return
+        // Only react once an overlay is actually shown.
+        if (overlayManager?.isShowing != true) return
+
+        val now = SystemClock.uptimeMillis()
+        when (event.eventType) {
+            AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
+                // A scroll inside the app we just translated invalidates cached
+                // node bounds — dismiss so the user can re-trigger if desired.
+                if (pkg == lastTranslatedTargetPackage) dismissOverlay()
+            }
+            AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                // The shade-collapse animation produces a transient
+                // WINDOW_STATE_CHANGED right after we dismiss the shade to
+                // show the overlay; ignore it during the grace period so we
+                // don't immediately tear down what we just built.
+                if (now - overlayShownTimestampMs < OVERLAY_GRACE_PERIOD_MS) return
+                // After the grace period any WINDOW_STATE_CHANGED — either the
+                // same app swapping its top window (e.g. dialog, activity
+                // transition) or the user app-switching to something else —
+                // invalidates the overlay's spatial assumptions. Dismiss.
+                dismissOverlay()
+            }
+            else -> {
+                // Other event types are not auto-dismiss triggers.
+            }
+        }
+    }
+
+    override fun onInterrupt() {
+        Log.i(TAG, "onInterrupt")
+    }
+
+    // -------------------------------------------------------------------------
+    // Public API used by QuickTileService and MainActivity
+    // -------------------------------------------------------------------------
+
+    /**
+     * Snapshot the current top application window, translate every text region
+     * found in its accessibility tree, and show the overlay.
+     *
+     * Safe to call from the main thread; work is dispatched onto
+     * [Dispatchers.Default] inside [serviceScope]. A failed translation for
+     * one region does not cancel the scope (SupervisorJob).
+     */
+    fun triggerTranslation() {
+        if (engine == null) {
+            Log.w(TAG, "triggerTranslation called before engine ready; ignoring")
+            return
+        }
+        serviceScope.launch(Dispatchers.Default) {
+            val targetWindow = pickTargetWindow() ?: run {
+                Log.i(TAG, "No target application window found")
+                return@launch
+            }
+            val root = targetWindow.root ?: run {
+                Log.i(TAG, "Target window has no root AccessibilityNodeInfo")
+                return@launch
+            }
+            val regions = withContext(Dispatchers.Default) { extractor.extract(root) }
+            if (regions.isEmpty()) {
+                Log.i(TAG, "No text regions found")
+                return@launch
+            }
+            val target = regions.first().packageName
+            lastTranslatedTargetPackage = target
+            // Dismiss the notification shade AFTER snapshotting the node tree
+            // so node references don't go stale mid-walk when the shade
+            // collapse animates and invalidates window roots.
+            withContext(Dispatchers.Main) {
+                performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+            }
+            val translated = regions.mapNotNull { reg ->
+                val tr: String? = try {
+                    engine?.translate(reg.text).also { result ->
+                        when {
+                            result == null ->
+                                Log.d(TAG, "Translation skipped: engine null")
+                            result == reg.text ->
+                                Log.d(TAG, "Translation unchanged: '${reg.text.take(48)}'")
+                            else ->
+                                Log.d(
+                                    TAG,
+                                    "Translation hit: '${reg.text.take(48)}' -> '${result.take(48)}'",
+                                )
+                        }
+                    }
+                } catch (e: Exception) {
+                    Log.w(TAG, "Translation failed for region: ${e.message}")
+                    null
+                }
+                if (tr == null || tr == reg.text) null else TranslatedTextRegion(reg, tr)
+            }
+            if (translated.isEmpty()) {
+                Log.i(TAG, "Nothing translated")
+                return@launch
+            }
+            withContext(Dispatchers.Main) {
+                overlayManager?.show(translated)
+                overlayShownTimestampMs = SystemClock.uptimeMillis()
+                android.service.quicksettings.TileService.requestListeningState(
+                    applicationContext,
+                    ComponentName(applicationContext, QuickTileService::class.java),
+                )
+            }
+        }
+    }
+
+    /** True iff the overlay is currently visible on screen. */
+    fun isOverlayShowing(): Boolean = overlayManager?.isShowing == true
+
+    /** Public dismiss entry point for the Quick Settings tile's toggle-off path. */
+    fun dismissOverlayPublic() {
+        dismissOverlay()
+    }
+
+    // -------------------------------------------------------------------------
+    // Internals
+    // -------------------------------------------------------------------------
+
+    /**
+     * Pick the topmost active application window to translate. Excludes our
+     * own package and — when more than one candidate remains — drops launcher
+     * windows so we don't translate the home screen behind a dialog.
+     */
+    private fun pickTargetWindow(): AccessibilityWindowInfo? {
+        val all = windows ?: return null
+        val ownPkg = packageName?.toString().orEmpty()
+        val candidates = all.filter { w ->
+            w.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
+                w.isActive &&
+                w.root?.packageName?.toString() != ownPkg
+        }
+        if (candidates.isEmpty()) return null
+        val pool = if (candidates.size > 1 && candidates.any { isLauncherWindow(it) }) {
+            val nonLauncher = candidates.filterNot { isLauncherWindow(it) }
+            if (nonLauncher.isNotEmpty()) nonLauncher else candidates
+        } else {
+            candidates
+        }
+        return pool.sortedByDescending { it.layer }.firstOrNull()
+    }
+
+    private fun isLauncherWindow(w: AccessibilityWindowInfo): Boolean {
+        val pkg = w.root?.packageName?.toString().orEmpty()
+        if (pkg.isEmpty()) return false
+        return PackageUtils.isLauncherPackage(applicationContext, pkg)
+    }
+
+    /**
+     * Hide the overlay and reset the grace-period timestamp, then ask the
+     * Quick Settings tile to re-query its state so it flips back to INACTIVE.
+     */
+    private fun dismissOverlay() {
+        overlayManager?.dismiss()
+        overlayShownTimestampMs = 0L
+        android.service.quicksettings.TileService.requestListeningState(
+            applicationContext,
+            ComponentName(applicationContext, QuickTileService::class.java),
+        )
+    }
+
+    /** Invoked by [OverlayManager] when the user taps the close button. */
+    private fun onOverlayCloseRequested() {
+        dismissOverlay()
+    }
+
+    private fun isEngineReady(): Boolean = engine != null
+
+    companion object {
+        private const val TAG = "TranslatorAccessibilityService"
+        private const val OVERLAY_GRACE_PERIOD_MS = 350L
+
+        @Volatile
+        var instance: TranslatorAccessibilityService? = null
+            private set
+
+        fun isReady(): Boolean = instance?.isEngineReady() == true
+    }
+}
