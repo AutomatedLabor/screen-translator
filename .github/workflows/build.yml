@@ -5,6 +5,11 @@ on:
     branches: [ main ]
   workflow_dispatch:
 
+# Prevent two concurrent release builds from racing (Council P0-2).
+concurrency:
+  group: build-release-${{ github.ref }}
+  cancel-in-progress: false
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -14,6 +19,9 @@ jobs:
     steps:
       - name: Checkout source
         uses: actions/checkout@v4
+
+      - name: Validate Gradle wrapper jar
+        uses: gradle/wrapper-validation-action@v3
 
       - name: Set up JDK 17
         uses: actions/setup-java@v4
@@ -26,14 +34,14 @@ jobs:
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0 platforms;android-31'
 
-      - name: Add build-tools (apksigner, aapt) to PATH
+      - name: Put build-tools (apksigner, aapt) on PATH
         run: |
           set -euo pipefail
           BT="$(ls -d "${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}/build-tools/"* | sort -V | tail -1)"
           echo "build-tools dir: $BT"
           echo "$BT" >> "$GITHUB_PATH"
 
-      - name: Decode release keystore (fail-closed)
+      - name: "Decode release keystore (fail-closed)"
         env:
           TRANSLATOR_KEYSTORE_BASE64: ${{ secrets.TRANSLATOR_KEYSTORE_BASE64 }}
           TRANSLATOR_KEYSTORE_PASSWORD: ${{ secrets.TRANSLATOR_KEYSTORE_PASSWORD }}
@@ -41,25 +49,26 @@ jobs:
           TRANSLATOR_KEY_PASSWORD: ${{ secrets.TRANSLATOR_KEY_PASSWORD }}
         run: |
           set -euo pipefail
-          if [ -z "${TRANSLATOR_KEYSTORE_BASE64}" ]; then
+          if [ -z "${TRANSLATOR_KEYSTORE_BASE64:-}" ]; then
             echo "::error::TRANSLATOR_KEYSTORE_BASE64 secret is not set; refusing to build an unsigned or wrongly-signed release APK."
             exit 1
           fi
-          if [ -z "${TRANSLATOR_KEYSTORE_PASSWORD}" ] || [ -z "${TRANSLATOR_KEY_ALIAS}" ] || [ -z "${TRANSLATOR_KEY_PASSWORD}" ]; then
+          if [ -z "${TRANSLATOR_KEYSTORE_PASSWORD:-}" ] || [ -z "${TRANSLATOR_KEY_ALIAS:-}" ] || [ -z "${TRANSLATOR_KEY_PASSWORD:-}" ]; then
             echo "::error::One or more keystore secrets are empty; aborting."
             exit 1
           fi
-          echo "${TRANSLATOR_KEYSTORE_BASE64}" | base64 -d > "$GITHUB_WORKSPACE/translator-release.jks"
+          # The .jks binary lives in RUNNER_TEMP (never inside the repo tree, so no
+          # wildcard upload-artifact or git add can leak it). keystore.properties
+          # (gitignored) lives at the repo root so Gradle's rootProject.file() finds it.
+          echo "${TRANSLATOR_KEYSTORE_BASE64}" | base64 -d > "$RUNNER_TEMP/translator-release.jks"
           {
-            echo "storeFile=$GITHUB_WORKSPACE/translator-release.jks"
+            echo "storeFile=$RUNNER_TEMP/translator-release.jks"
             echo "storePassword=$TRANSLATOR_KEYSTORE_PASSWORD"
             echo "keyAlias=$TRANSLATOR_KEY_ALIAS"
             echo "keyPassword=$TRANSLATOR_KEY_PASSWORD"
           } > "$GITHUB_WORKSPACE/keystore.properties"
-          echo "keystore.properties + translator-release.jks written."
-          ls -l "$GITHUB_WORKSPACE/translator-release.jks" "$GITHUB_WORKSPACE/keystore.properties"
-          # Smoke-check the keystore is readable with the supplied password.
-          keytool -list -keystore "$GITHUB_WORKSPACE/translator-release.jks" \
+          echo "keystore staged (jks in RUNNER_TEMP, properties at repo root)."
+          keytool -list -keystore "$RUNNER_TEMP/translator-release.jks" \
             -storepass "$TRANSLATOR_KEYSTORE_PASSWORD" -alias "$TRANSLATOR_KEY_ALIAS" \
             | grep -E "Alias name|Owner|Entry type" || { echo "::error::keystore/password mismatch"; exit 1; }
 
@@ -85,7 +94,7 @@ jobs:
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: Verify release APK signing (fail-closed: v2+v3 required, debug key rejected, release DN required)
+      - name: "Verify release APK signing (fail-closed)"
         run: |
           set -euo pipefail
           APK="app/build/outputs/apk/release/app-release.apk"
@@ -93,21 +102,29 @@ jobs:
           command -v apksigner
           echo "=== apksigner verify --print-certs --verbose ==="
           apksigner verify --print-certs --verbose "$APK" | tee apksigner-verify.txt
-          echo "=== assertions ==="
+          echo "=== assertions (Council P0-1/P0-3: v1+v2+v3 required, release DN required, debug key rejected, cert SHA-256 pinned) ==="
           grep -q "^Verifies$" apksigner-verify.txt || { echo "::error::apksigner did NOT report 'Verifies'"; exit 1; }
+          grep -q "Verified using v1 scheme (JAR signing): true" apksigner-verify.txt || { echo "::error::v1 scheme NOT verified (expected true — enableV1Signing=true in gradle)"; exit 1; }
           grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" apksigner-verify.txt || { echo "::error::v2 scheme NOT verified"; exit 1; }
           grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" apksigner-verify.txt || { echo "::error::v3 scheme NOT verified"; exit 1; }
           grep -q "CN=Screen Translator Release" apksigner-verify.txt || { echo "::error::cert DN does NOT contain 'CN=Screen Translator Release'"; exit 1; }
           if grep -q "CN=Android Debug" apksigner-verify.txt; then echo "::error::cert is the public Android Debug key — rejected"; exit 1; fi
-          echo "::notice::Release APK signing verified: Verifies, v2=true, v3=true, CN=Screen Translator Release."
+          # P0-1: cert SHA-256 baseline — detects key rotation even if the DN is unchanged.
+          EXPECTED_CERT_SHA256="a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2"
+          ACTUAL_CERT_SHA256="$(grep -E '^Signer #1 certificate SHA-256 digest:' apksigner-verify.txt | sed -E 's/^Signer #1 certificate SHA-256 digest: ([a-f0-9]+).*/\1/')"
+          echo "expected cert SHA-256: $EXPECTED_CERT_SHA256"
+          echo "actual   cert SHA-256: $ACTUAL_CERT_SHA256"
+          [ -n "$ACTUAL_CERT_SHA256" ] || { echo "::error::could not parse cert SHA-256 from apksigner output"; exit 1; }
+          [ "$ACTUAL_CERT_SHA256" = "$EXPECTED_CERT_SHA256" ] || { echo "::error::cert SHA-256 mismatch — possible KEY ROTATION (expected $EXPECTED_CERT_SHA256, got $ACTUAL_CERT_SHA256)"; exit 1; }
+          echo "::notice::Release APK signing verified: Verifies, v1+v2+v3=true, DN=CN=Screen Translator Release, cert SHA-256 matches pinned baseline."
 
-      - name: Generate SHA-256 sidecar + stage release assets
+      - name: "Generate SHA-256 sidecar and stage release assets"
         run: |
           set -euo pipefail
           REL="app/build/outputs/apk/release"
           DBG="app/build/outputs/apk/debug"
           ( cd "$REL" && sha256sum app-release.apk > app-release.apk.sha256 )
-          echo "=== SHA-256 ==="
+          echo "=== APK SHA-256 ==="
           cat "$REL/app-release.apk.sha256"
           cp "$REL/app-release.apk"        "$GITHUB_WORKSPACE/screen-translator-v1.1.0-release.apk"
           cp "$REL/app-release.apk.sha256" "$GITHUB_WORKSPACE/screen-translator-v1.1.0-release.apk.sha256"
@@ -164,12 +181,18 @@ jobs:
               throwaway debug keystore (a different key on every CI run, and the public
               Android debug key) — which made in-place updates impossible and is the
               classic "no certificates / install failed" trap. v1.1.0 is signed with a
-              dedicated `CN=Screen Translator Release, O=AutomatedLabor` key, v2+v3
+              dedicated `CN=Screen Translator Release, O=AutomatedLabor` key, v1+v2+v3
               schemes, consistent across every build.
-            - **CI is now fail-closed on signing.** If `TRANSLATOR_KEYSTORE_BASE64` is
+            - **v1 signing deliberately enabled.** The APK is signed with all three
+              schemes (v1 JAR + v2 + v3). This means **both** `keytool -printcert
+              -jarfile` **and** `apksigner verify` report the signer — so you will NOT
+              see the v1-only false-negative "Not a signed jar file" that confused
+              users of v2/v3-only APKs before. (See build-learnings headline #16.)
+            - **CI is fail-closed on signing.** If `TRANSLATOR_KEYSTORE_BASE64` is
               missing the workflow aborts (no unsigned APK can ship). An `apksigner
-              verify` step rejects any APK that is not v2+v3 signed with the expected
-              release DN, including an explicit reject of the debug key.
+              verify` step requires `Verifies` + v1+v2+v3=true + DN contains
+              `CN=Screen Translator Release` + cert SHA-256 matches the pinned baseline
+              (rotation detection) and explicitly rejects the debug key.
             - versionCode 1 → 2, versionName 1.0.0 → 1.1.0.
 
             ## Files
@@ -197,15 +220,30 @@ jobs:
             8. Open any German app → tap the tile → German text is overlaid with English.
                Tap **X** (top-right) or scroll / switch apps to dismiss.
 
+            ## How to verify the APK is signed (if you want to check)
+
+            Use **`apksigner`**, NOT `keytool -printcert` alone (keytool is v1-only and
+            gives false negatives on v2/v3-only APKs — though this APK has v1 enabled so
+            keytool will also work):
+
+            ```
+            apksigner verify --print-certs --verbose screen-translator-v1.1.0-release.apk
+            # expect: Verifies, v1=true, v2=true, v3=true,
+            #         Signer #1 certificate DN: CN=Screen Translator Release, O=AutomatedLabor, C=US
+            #         Signer #1 certificate SHA-256 digest: a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2
+            sha256sum -c screen-translator-v1.1.0-release.apk.sha256
+            ```
+
             ## Requirements
 
             - Android 12+ (API 31), ~150 MB free storage, no Google account required
               (ML Kit translation is on-device after the one-time model download).
 
-            ## Verification
+            ## Verification done by CI
 
-            - `apksigner verify --print-certs --verbose` → `Verifies`, v2=true, v3=true,
-              signer DN contains `CN=Screen Translator Release`.
+            - `apksigner verify --print-certs --verbose` → `Verifies`, v1=true, v2=true,
+              v3=true, signer DN contains `CN=Screen Translator Release`, cert SHA-256
+              matches pinned baseline `a0b5e5…7fa2` (no key rotation).
             - Unit tests: 41 JVM tests (BoundingBox geometry, ScreenTextExtractor
               dedup/grouping, MlKitTranslationEngine regex + language-id filtering,
               LruCache behavior).

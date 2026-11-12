@@ -31,13 +31,25 @@ android {
     }
 
     signingConfigs {
-        // Dedicated release key, populated only when keystore.properties exists.
+        // Dedicated release key, populated only when keystore.properties declares a storeFile
+        // (Council P1-12: gate on the property, not just the file's existence, to avoid an NPE
+        // if the file is present but empty).
         create("release") {
-            if (keystorePropertiesFile.exists()) {
-                storeFile = file(keystoreProperties.getProperty("storeFile"))
+            val storeFilePath = keystoreProperties.getProperty("storeFile")
+            if (storeFilePath != null) {
+                storeFile = file(storeFilePath)
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
+                // Explicit v1+v2+v3 so the disposition is unambiguous (Council P0-3).
+                // v1 is enabled DELIBERATELY so `keytool -printcert -jarfile` ALSO reports the
+                // signer — this prevents the v1-only false-negative "Not a signed jar file" that
+                // bit users of v2/v3-only APKs (build-learnings headline #16 / Threshold
+                // POST-MORTEM-shipped-not-installable). v2+v3 are what Android 7+ enforces;
+                // all three together = maximum installability + inspectability.
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
         // Default debug key (generated on demand by AGP for local dev builds).
@@ -48,10 +60,10 @@ android {
         release {
             isMinifyEnabled = false
             isShrinkResources = false
-            // Use the dedicated release key when keystore.properties is present (CI);
+            // Use the dedicated release key when a storeFile is declared (CI);
             // fall back to debug ONLY for local dev. CI's `apksigner verify` step is the
             // fail-closed gate that rejects any APK not signed with the release key.
-            signingConfig = if (keystorePropertiesFile.exists()) {
+            signingConfig = if (keystoreProperties.getProperty("storeFile") != null) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")
