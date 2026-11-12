@@ -68,9 +68,14 @@ jobs:
             echo "keyPassword=$TRANSLATOR_KEY_PASSWORD"
           } > "$GITHUB_WORKSPACE/keystore.properties"
           echo "keystore staged (jks in RUNNER_TEMP, properties at repo root)."
+          # Smoke-check: keystore + password + alias are consistent (keytool exits 0).
+          # NOTE: do NOT grep keytool's stdout for verbose fields — `keytool -list`
+          # (without -v) prints a one-line summary that lacks "Alias name"/"Owner"/
+          # "Entry type"; a grep for those would always fail. Rely on the exit code.
           keytool -list -keystore "$RUNNER_TEMP/translator-release.jks" \
-            -storepass "$TRANSLATOR_KEYSTORE_PASSWORD" -alias "$TRANSLATOR_KEY_ALIAS" \
-            | grep -E "Alias name|Owner|Entry type" || { echo "::error::keystore/password mismatch"; exit 1; }
+            -storepass "$TRANSLATOR_KEYSTORE_PASSWORD" -alias "$TRANSLATOR_KEY_ALIAS" >/dev/null 2>&1 \
+            || { echo "::error::keystore/password/alias mismatch — check TRANSLATOR_KEYSTORE_* secrets"; exit 1; }
+          echo "keystore smoke-check passed (alias readable with supplied password)."
 
       - name: Make gradlew executable
         run: chmod +x gradlew
