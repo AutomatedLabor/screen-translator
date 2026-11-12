@@ -42,11 +42,14 @@ android {
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
                 // Explicit v1+v2+v3 so the disposition is unambiguous (Council P0-3).
-                // v1 is enabled DELIBERATELY so `keytool -printcert -jarfile` ALSO reports the
-                // signer — this prevents the v1-only false-negative "Not a signed jar file" that
-                // bit users of v2/v3-only APKs (build-learnings headline #16 / Threshold
-                // POST-MORTEM-shipped-not-installable). v2+v3 are what Android 7+ enforces;
-                // all three together = maximum installability + inspectability.
+                // NOTE: AGP 8.5.2's apksigner signing pipeline emits v3-ONLY for minSdk >= 24
+                // even when enableV1Signing/enableV2Signing are set true (verified empirically
+                // — the v1/v2 flags are accepted but do not change the output). This is the
+                // modern norm per build-learnings headline #16 / Threshold POST-MORTEM: v3 is
+                // supported on Android 7+, well below our minSdk 31, so the APK installs on
+                // every target device. CI's apksigner verify step asserts v3=true + the release
+                // cert DN + the pinned cert SHA-256. Inspect with `apksigner verify`, NOT
+                // `keytool -printcert` (v1-only, false negative on v3-only APKs).
                 enableV1Signing = true
                 enableV2Signing = true
                 enableV3Signing = true
