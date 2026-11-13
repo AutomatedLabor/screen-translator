@@ -32,4 +32,8 @@
     <string name="translation_test_placeholder">Translation will appear here.</string>
     <string name="model_not_downloaded_toast">Download the model first — open the app and tap Download model.</string>
     <string name="continuous_mode_active">Live translation active — tap ✕ or the tile to stop</string>
+    <string name="diag_no_window">No app window found — open an app first, then tap the tile.</string>
+    <string name="diag_no_content">Target window has no readable content.</string>
+    <string name="diag_no_text">No text found on screen.</string>
+    <string name="diag_nothing_translated">Nothing to translate — is the model downloaded? Is the text in the source language?</string>
 </resources>

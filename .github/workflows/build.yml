@@ -179,9 +179,9 @@ jobs:
           for APK in "$REL"/*.apk; do
             NAME="$(basename "$APK" .apk)"
             case "$NAME" in
-              *arm64-v8a*) ASSET="screen-translator-v1.9.0-arm64-v8a-release" ;;
-              *universal*) ASSET="screen-translator-v1.9.0-universal-release" ;;
-              *)           ASSET="screen-translator-v1.9.0-release" ;;
+              *arm64-v8a*) ASSET="screen-translator-v2.0.0-arm64-v8a-release" ;;
+              *universal*) ASSET="screen-translator-v2.0.0-universal-release" ;;
+              *)           ASSET="screen-translator-v2.0.0-release" ;;
             esac
             ( cd "$REL" && sha256sum "$(basename "$APK")" > "$ASSET.apk.sha256" )
             cp "$APK" "$STAGE/$ASSET.apk"
@@ -189,8 +189,8 @@ jobs:
             echo "staged $ASSET.apk ($(wc -c < "$STAGE/$ASSET.apk") bytes)  sha256: $(awk '{print $1}' "$STAGE/$ASSET.apk.sha256")"
           done
           # Badging from the arm64 variant (primary); fall back to universal.
-          ARM="$STAGE/screen-translator-v1.9.0-arm64-v8a-release.apk"
-          [ -f "$ARM" ] || ARM="$STAGE/screen-translator-v1.9.0-universal-release.apk"
+          ARM="$STAGE/screen-translator-v2.0.0-arm64-v8a-release.apk"
+          [ -f "$ARM" ] || ARM="$STAGE/screen-translator-v2.0.0-universal-release.apk"
           aapt dump badging "$ARM" | head -25 | tee badging.txt
 
       - name: Upload release APKs artifact
@@ -232,19 +232,42 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          tag_name: v1.9.0
-          name: Screen Translator v1.9.0 (continuous-mode notification + POST_NOTIFICATIONS)
+          tag_name: v2.0.0
+          name: Screen Translator v2.0.0 (diagnostic Toasts at every tile-failure point + new repo)
           files: |
-            screen-translator-v1.9.0-arm64-v8a-release.apk
-            screen-translator-v1.9.0-arm64-v8a-release.apk.sha256
-            screen-translator-v1.9.0-universal-release.apk
-            screen-translator-v1.9.0-universal-release.apk.sha256
+            screen-translator-v2.0.0-arm64-v8a-release.apk
+            screen-translator-v2.0.0-arm64-v8a-release.apk.sha256
+            screen-translator-v2.0.0-universal-release.apk
+            screen-translator-v2.0.0-universal-release.apk.sha256
             apksigner-verify.txt
             badging.txt
           body: |
-            # Screen Translator v1.9.0 — continuous-mode notification + POST_NOTIFICATIONS
+            # Screen Translator v2.0.0 — diagnostic Toasts at every tile-failure point
 
             Built from commit `${{ github.sha }}`.
+
+            ## What changed in v2.0.0
+
+            - **ARCHITECTURE DECISION: keep AccessibilityService (NOT MediaProjection).**
+              The v2.0 spec described a MediaProjection + OCR pipeline, but MediaProjection
+              CANNOT capture FLAG_SECURE windows (banking / DHL / parcel apps show black
+              screens) — the exact problem the accessibility approach was chosen to bypass.
+              Switching would break the app's core use case. The accessibility pipeline is
+              verified working (instrumented emulator test passes). MediaProjection + OCR
+              for image-text is a future fallback (needs device testing for the consent /
+              foreground-service flow).
+            - **ISSUE 1 FIX (tile does nothing): diagnostic Toasts at every failure point.**
+              The #1 cause of "tap the tile, nothing happens" was a SILENT failure in the
+              pipeline — pickTargetWindow returns null (no app window), no root, no text
+              regions, or nothing translated — all returned with ZERO user feedback. Now each
+              failure shows a Toast explaining WHY: "No app window found — open an app first",
+              "No text found on screen", "Nothing to translate — is the model downloaded? Is
+              the text in the source language?". The model-missing Toast (v1.6.0) + these
+              new Toasts cover every failure mode. The user now knows exactly what to fix.
+            - **New repo: github.com/AutomatedLabor/screen-translator** (renamed from
+              translation-app; same signing key cert SHA-256 a0b5e5…7fa2, same CI, same
+              secrets re-added).
+            - versionCode 10 → 11, versionName 1.9.0 → 2.0.0.
 
             ## What changed in v1.9.0
 
@@ -377,8 +400,8 @@ jobs:
 
             | APK | Size | Install on |
             |---|---|---|
-            | `screen-translator-v1.9.0-arm64-v8a-release.apk` | ~22 MB | **Any phone from ~2017** (Pixel, Samsung, OnePlus, Xiaomi, etc. — 64-bit ARM). Try this first. |
-            | `screen-translator-v1.9.0-universal-release.apk` | ~72 MB | 32-bit ARM phones (pre-2017), x86 emulators, rare x86 devices. Fallback. |
+            | `screen-translator-v2.0.0-arm64-v8a-release.apk` | ~22 MB | **Any phone from ~2017** (Pixel, Samsung, OnePlus, Xiaomi, etc. — 64-bit ARM). Try this first. |
+            | `screen-translator-v2.0.0-universal-release.apk` | ~72 MB | 32-bit ARM phones (pre-2017), x86 emulators, rare x86 devices. Fallback. |
 
             ## Install
 
@@ -401,11 +424,11 @@ jobs:
             for CI's proof.
 
             ```
-            apksigner verify --print-certs --verbose screen-translator-v1.9.0-arm64-v8a-release.apk
+            apksigner verify --print-certs --verbose screen-translator-v2.0.0-arm64-v8a-release.apk
             # expect: Verifies, v2=true, v3=true,
             #         Signer #1 certificate DN: CN=Screen Translator Release, O=AutomatedLabor, C=US
             #         Signer #1 certificate SHA-256 digest: a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2
-            sha256sum -c screen-translator-v1.9.0-arm64-v8a-release.apk.sha256
+            sha256sum -c screen-translator-v2.0.0-arm64-v8a-release.apk.sha256
             ```
 
             ## Verification done by CI

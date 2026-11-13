@@ -346,16 +346,25 @@ class TranslatorAccessibilityService : AccessibilityService() {
         serviceScope.launch(Dispatchers.Default) {
             val targetWindow = pickTargetWindow() ?: run {
                 Log.d(TAG, "retranslate: no target window")
+                if (initial) withContext(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, getString(R.string.diag_no_window), Toast.LENGTH_LONG).show()
+                }
                 return@launch
             }
             val root = targetWindow.root ?: run {
                 Log.d(TAG, "retranslate: no root")
+                if (initial) withContext(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, getString(R.string.diag_no_content), Toast.LENGTH_LONG).show()
+                }
                 return@launch
             }
             val regions = withContext(Dispatchers.Default) { extractor.extract(root) }
             if (Build.VERSION.SDK_INT < 33) { try { root.recycle() } catch (_: Throwable) {} }
             if (regions.isEmpty()) {
                 Log.d(TAG, "retranslate: no regions")
+                if (initial) withContext(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, getString(R.string.diag_no_text), Toast.LENGTH_LONG).show()
+                }
                 return@launch
             }
             val target = regions.first().packageName
@@ -378,6 +387,9 @@ class TranslatorAccessibilityService : AccessibilityService() {
             }
             if (translated.isEmpty()) {
                 Log.d(TAG, "retranslate: nothing translated")
+                if (initial) withContext(Dispatchers.Main) {
+                    Toast.makeText(applicationContext, getString(R.string.diag_nothing_translated), Toast.LENGTH_LONG).show()
+                }
                 return@launch
             }
             withContext(Dispatchers.Main) {
