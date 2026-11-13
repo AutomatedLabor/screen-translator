@@ -26,7 +26,7 @@ jobs:
       - name: "Scan for leaked secrets (gitleaks, fail-closed)"
         # v1.4.0 confirmed clean ("no leaks found"). Now fail-closed: any secret (PAT,
         # keystore password, API key) committed blocks the build. (Council P1-4 / supply-chain.)
-        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
+        uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e  # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
