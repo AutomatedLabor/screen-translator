@@ -118,6 +118,14 @@ class OverlayManager(
         }
     }
 
+    /** Smoothly update the translation cards in-place (no dismiss+re-add flicker). */
+    fun update(regions: List<TranslatedTextRegion>) {
+        Log.d(tag, "update regions=${regions.size}")
+        mainHandler.post {
+            translationView?.updateRegions(regions)
+        }
+    }
+
     /** True iff at least the primary translation window is attached. */
     val isShowing: Boolean
         get() = translationView != null
@@ -190,9 +198,15 @@ class OverlayManager(
      */
     private inner class TranslationCardView(
         context: Context,
-        private val regions: List<TranslatedTextRegion>,
+        private var regions: List<TranslatedTextRegion>,
         private val darkTheme: Boolean,
     ) : View(context) {
+
+        /** Smoothly replace the regions + redraw, without dismiss+re-add (no flicker). */
+        fun updateRegions(newRegions: List<TranslatedTextRegion>) {
+            regions = newRegions
+            invalidate()
+        }
 
         private val cardPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL

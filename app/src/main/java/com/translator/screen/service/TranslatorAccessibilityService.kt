@@ -2,8 +2,12 @@ package com.translator.screen.service
 
 import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
+import android.os.Handler
+import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
+import android.widget.Toast
+import com.translator.screen.R
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
 import com.translator.screen.extract.IScreenTextExtractor
@@ -58,6 +62,16 @@ class TranslatorAccessibilityService : AccessibilityService() {
     @Volatile
     private var isLocked: Boolean = false
 
+    // ----- Continuous (live) translation mode -----
+    @Volatile
+    private var continuousMode: Boolean = false
+
+    @Volatile
+    private var continuousTargetPackage: String? = null
+
+    private val continuousHandler = Handler(Looper.getMainLooper())
+    private val retranslateRunnable = Runnable { retranslate() }
+
     // -------------------------------------------------------------------------
     // AccessibilityService lifecycle
     // -------------------------------------------------------------------------
@@ -92,6 +106,30 @@ class TranslatorAccessibilityService : AccessibilityService() {
         // Only react once an overlay is actually shown.
         if (overlayManager?.isShowing != true) return
 
+        // Continuous (live) mode: debounce + re-translate on content/scroll/text changes
+        // in the target app, so the overlay updates smoothly as on-screen text changes
+        // (e.g. a chat where new German messages arrive). (v1.6.0.)
+        if (continuousMode && pkg == continuousTargetPackage) {
+            when (event.eventType) {
+                AccessibilityEvent.TYPE_WINDOW_CONTENT_CHANGED,
+                AccessibilityEvent.TYPE_VIEW_SCROLLED,
+                AccessibilityEvent.TYPE_VIEW_TEXT_CHANGED -> {
+                    continuousHandler.removeCallbacks(retranslateRunnable)
+                    continuousHandler.postDelayed(retranslateRunnable, CONTINUOUS_DEBOUNCE_MS)
+                }
+                AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED -> {
+                    // A new top-level window in the target app (dialog / activity transition) —
+                    // re-translate immediately rather than dismiss.
+                    if (SystemClock.uptimeMillis() - overlayShownTimestampMs >= OVERLAY_GRACE_PERIOD_MS) {
+                        continuousHandler.removeCallbacks(retranslateRunnable)
+                        continuousHandler.postDelayed(retranslateRunnable, 0L)
+                    }
+                }
+            }
+            return
+        }
+
+        // One-shot mode: dismiss on scroll / window-state-change (existing behavior).
         val now = SystemClock.uptimeMillis()
         when (event.eventType) {
             AccessibilityEvent.TYPE_VIEW_SCROLLED -> {
@@ -212,7 +250,113 @@ class TranslatorAccessibilityService : AccessibilityService() {
 
     /** Public dismiss entry point for the Quick Settings tile's toggle-off path. */
     fun dismissOverlayPublic() {
+        stopContinuousMode()
+    }
+
+    /**
+     * Toggle continuous (live) translation mode. Called by the Quick Settings tile:
+     * tap once to start live translation (overlay persists + updates as on-screen text
+     * changes); tap again (or the ✕ close button) to stop. This is the primary paradigm.
+     */
+    fun toggleContinuousMode() {
+        if (continuousMode || overlayManager?.isShowing == true) {
+            stopContinuousMode()
+        } else {
+            startContinuousMode()
+        }
+    }
+
+    /** Start continuous (live) translation of the current foreground app. */
+    fun startContinuousMode() {
+        if (engine == null) {
+            Log.w(TAG, "startContinuousMode: engine not ready")
+            return
+        }
+        serviceScope.launch(Dispatchers.Default) {
+            // Model-downloaded check — the #1 cause of "tap the tile, nothing happens".
+            val modelReady = try { engine?.isModelDownloaded() ?: false } catch (e: Exception) {
+                if (e is CancellationException) throw e
+                false
+            }
+            if (!modelReady) {
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(
+                        applicationContext,
+                        applicationContext.getString(R.string.model_not_downloaded_toast),
+                        Toast.LENGTH_LONG,
+                    ).show()
+                }
+                Log.w(TAG, "startContinuousMode: model not downloaded; aborting")
+                return@launch
+            }
+            retranslate(initial = true)
+        }
+    }
+
+    /** Stop continuous mode + dismiss the overlay. */
+    fun stopContinuousMode() {
+        continuousHandler.removeCallbacks(retranslateRunnable)
+        continuousMode = false
+        continuousTargetPackage = null
         dismissOverlay()
+    }
+
+    /**
+     * Snapshot the current foreground app, translate, and show (or smoothly update) the
+     * overlay. In continuous mode this is called debounced on each content change so the
+     * overlay updates live without flicker ([OverlayManager.update] replaces in-place).
+     */
+    private fun retranslate(initial: Boolean = false) {
+        serviceScope.launch(Dispatchers.Default) {
+            val targetWindow = pickTargetWindow() ?: run {
+                Log.d(TAG, "retranslate: no target window")
+                return@launch
+            }
+            val root = targetWindow.root ?: run {
+                Log.d(TAG, "retranslate: no root")
+                return@launch
+            }
+            val regions = withContext(Dispatchers.Default) { extractor.extract(root) }
+            if (Build.VERSION.SDK_INT < 33) { try { root.recycle() } catch (_: Throwable) {} }
+            if (regions.isEmpty()) {
+                Log.d(TAG, "retranslate: no regions")
+                return@launch
+            }
+            val target = regions.first().packageName
+            if (initial) {
+                withContext(Dispatchers.Main) {
+                    if (Build.VERSION.SDK_INT >= 30) {
+                        performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+                    }
+                }
+            }
+            val translated = regions.mapNotNull { reg ->
+                val tr: String? = try {
+                    engine?.translate(reg.text)
+                } catch (e: Exception) {
+                    if (e is CancellationException) throw e
+                    Log.w(TAG, "retranslate: translate failed: ${e.message}")
+                    null
+                }
+                if (tr == null || tr == reg.text) null else TranslatedTextRegion(reg, tr)
+            }
+            if (translated.isEmpty()) {
+                Log.d(TAG, "retranslate: nothing translated")
+                return@launch
+            }
+            withContext(Dispatchers.Main) {
+                if (initial || overlayManager?.isShowing != true) {
+                    overlayManager?.show(translated)
+                    overlayShownTimestampMs = SystemClock.uptimeMillis()
+                    continuousMode = true
+                    continuousTargetPackage = target
+                    requestTileListeningState()
+                } else {
+                    // Smooth in-place update (no dismiss+re-add flicker).
+                    overlayManager?.update(translated)
+                }
+            }
+        }
     }
 
     /**
@@ -312,6 +456,7 @@ class TranslatorAccessibilityService : AccessibilityService() {
     companion object {
         private const val TAG = "TranslatorAccessibilityService"
         private const val OVERLAY_GRACE_PERIOD_MS = 350L
+        private const val CONTINUOUS_DEBOUNCE_MS = 400L
 
         @Volatile
         var instance: TranslatorAccessibilityService? = null

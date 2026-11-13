@@ -69,25 +69,13 @@ class QuickTileService : TileService() {
             }
             return
         }
-        if (service.isOverlayShowing()) {
-            // Toggle off if currently showing.
-            service.dismissOverlayPublic()
-            refreshTileState()
-            return
-        }
-        // Trigger translation. On a locked device, defer until the keyguard
-        // is dismissed so the accessibility windows list reflects the actual
-        // app under the lock screen.
-        // isLocked + unlockAndRun require API 26 (Android 8). On API 24-25 (Android 7-7.1)
-        // neither exists; just trigger directly (the keyguard case is rare + the snapshot
-        // picks whatever window is available). (v1.4.0: minSdk 24 -> Android 7+.)
+        // Toggle continuous (live) translation: tap to start (overlay persists + updates
+        // as on-screen text changes), tap again / ✕ to stop. (v1.6.0.)
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isLocked) {
-            unlockAndRun { service.triggerTranslation() }
+            unlockAndRun { service.toggleContinuousMode() }
         } else {
-            service.triggerTranslation()
+            service.toggleContinuousMode()
         }
-        // Optimistically refresh now; the service will ping us again via
-        // requestListeningState once the overlay is actually shown.
         refreshTileState()
     }
 
@@ -109,7 +97,7 @@ class QuickTileService : TileService() {
                 tile.label = label
             }
         }
-        tile.contentDescription = "Translate German screen to English"
+        tile.contentDescription = "Translate screen live (German to your language)"
         tile.updateTile()
         Log.d(TAG, "refreshTileState -> state=${tile.state}")
     }

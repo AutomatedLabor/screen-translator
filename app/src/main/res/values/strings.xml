@@ -30,4 +30,6 @@
     <string name="model_download_in_progress">Downloading model…</string>
     <string name="model_download_failed">Download failed</string>
     <string name="translation_test_placeholder">Translation will appear here.</string>
+    <string name="model_not_downloaded_toast">Download the model first — open the app and tap Download model.</string>
+    <string name="continuous_mode_active">Live translation active — tap ✕ or the tile to stop</string>
 </resources>
