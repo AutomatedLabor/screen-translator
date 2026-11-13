@@ -72,10 +72,15 @@ android {
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
-            // Use the dedicated release key when a storeFile is declared (CI);
-            // fall back to debug ONLY for local dev. CI's `apksigner verify` step is the
-            // fail-closed gate that rejects any APK not signed with the release key.
-            signingConfig = if (keystoreProperties.getProperty("storeFile") != null) {
+            // In CI (CI=true), leave signingConfig null so AGP produces an UNSIGNED,
+            // zipaligned release APK; the workflow then zipaligns + apksigner-signs it
+            // with v1+v2+v3 (forcing v1 is REQUIRED for Android 7-8 installability —
+            // AGP's own signing emits v3-only, and apksigner sign on an already-signed
+            // APK doesn't add v1). Locally, sign with the release key (if
+            // keystore.properties present) or the debug key. (v1.4.0: minSdk 24.)
+            signingConfig = if (System.getenv("CI") == "true") {
+                null
+            } else if (keystoreProperties.getProperty("storeFile") != null) {
                 signingConfigs.getByName("release")
             } else {
                 signingConfigs.getByName("debug")

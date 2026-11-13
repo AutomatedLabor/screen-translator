@@ -105,10 +105,13 @@ jobs:
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: "Re-sign release APKs (force v1+v2+v3 for Android 7+)"
-        # AGP 8.5.2 may emit v3-only despite enableV1/V2 flags. v3 alone FAILS to install
-        # on Android 7-8 (API 24-27, which support only v1+v2). Re-sign each variant with
-        # apksigner forcing all three schemes so the APK installs on Android 7+. (v1.4.0.)
+      - name: "Zipalign + sign release APKs (v1+v2+v3 for Android 7+)"
+        # In CI, AGP leaves the release APK unsigned (signingConfig=null when CI=true) +
+        # zipaligned. We sign it here with apksigner forcing v1+v2+v3. v1 is REQUIRED for
+        # Android 7-8 (API 24-27, which support only v1+v2 — v3-only APKs fail to install).
+        # v1 also makes `keytool -printcert -jarfile` report the signer. Signing from
+        # unsigned (not re-signing) is the only reliable way to get v1 — apksigner sign on
+        # an already-signed APK does not add v1. (v1.4.0: minSdk 24 -> Android 7+.)
         env:
           TRANSLATOR_KEYSTORE_PASSWORD: ${{ secrets.TRANSLATOR_KEYSTORE_PASSWORD }}
           TRANSLATOR_KEY_ALIAS: ${{ secrets.TRANSLATOR_KEY_ALIAS }}
@@ -120,9 +123,11 @@ jobs:
           KS="$RUNNER_TEMP/translator-release.jks"
           for APK in "$REL"/*.apk; do
             NAME="$(basename "$APK")"
-            echo "=== re-signing $NAME with v1+v2+v3 ==="
-            # apksigner sign overwrites the existing signature; the APK is already zipaligned
-            # by AGP's release pipeline (apksigner preserves alignment).
+            echo "=== zipalign + v1+v2+v3 sign $NAME ==="
+            # Re-zipalign (idempotent on AGP's already-aligned output) — required for v1;
+            # apksigner sign checks alignment + fails if misaligned.
+            zipalign -f 4 "$APK" "$APK.aligned"
+            mv "$APK.aligned" "$APK"
             apksigner sign \
               --ks "$KS" \
               --ks-pass "pass:$TRANSLATOR_KEYSTORE_PASSWORD" \
@@ -132,7 +137,7 @@ jobs:
               --v2-signing-enabled true \
               --v3-signing-enabled true \
               "$APK"
-            echo "re-signed $NAME"
+            echo "signed $NAME (v1+v2+v3)"
           done
 
       - name: "Verify release APK signing (fail-closed, every variant)"
