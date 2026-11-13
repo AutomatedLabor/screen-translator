@@ -1,5 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:tools="http://schemas.android.com/tools"
     android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
     android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews"
@@ -7,6 +8,7 @@
     android:canPerformGestures="false"
     android:canRequestFilterKeyEvents="false"
     android:isAccessibilityTool="true"
+    tools:targetApi="33"
     android:description="@string/accessibility_service_description"
     android:settingsActivity="com.translator.screen.ui.MainActivity"
     android:notificationTimeout="100" />

@@ -87,7 +87,13 @@ class ScreenTextExtractor : IScreenTextExtractor {
 
     private fun pickText(node: AccessibilityNodeInfo): String? {
         // Order matters: prefer explicit text, then contentDescription, then hint.
-        val candidates = listOf(node.text, node.contentDescription, node.hintText)
+        // AccessibilityNodeInfo.hintText requires API 26 (Android 8); on API 24-25 it
+        // would NoSuchMethodError, so guard it. (v1.4.0: minSdk 24 -> Android 7+.)
+        val candidates = mutableListOf<CharSequence?>().apply {
+            add(node.text)
+            add(node.contentDescription)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) add(node.hintText)
+        }
         for (candidate in candidates) {
             if (candidate.isNullOrBlank()) continue
             val trimmed = candidate.toString().trim()

@@ -22,10 +22,10 @@ android {
 
     defaultConfig {
         applicationId = "com.translator.screen"
-        minSdk = 31
+        minSdk = 24
         targetSdk = 35
-        versionCode = 4
-        versionName = "1.3.0"
+        versionCode = 5
+        versionName = "1.4.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -41,15 +41,14 @@ android {
                 storePassword = keystoreProperties.getProperty("storePassword")
                 keyAlias = keystoreProperties.getProperty("keyAlias")
                 keyPassword = keystoreProperties.getProperty("keyPassword")
-                // Explicit v1+v2+v3 so the disposition is unambiguous (Council P0-3).
-                // NOTE: AGP 8.5.2's apksigner signing pipeline emits v3-ONLY for minSdk >= 24
-                // even when enableV1Signing/enableV2Signing are set true (verified empirically
-                // — the v1/v2 flags are accepted but do not change the output). This is the
-                // modern norm per build-learnings headline #16 / Threshold POST-MORTEM: v3 is
-                // supported on Android 7+, well below our minSdk 31, so the APK installs on
-                // every target device. CI's apksigner verify step asserts v3=true + the release
-                // cert DN + the pinned cert SHA-256. Inspect with `apksigner verify`, NOT
-                // `keytool -printcert` (v1-only, false negative on v3-only APKs).
+                // v1+v2+v3 enabled. For Android 7+ (minSdk 24) support this is REQUIRED:
+                // v3 alone (Android 9+/API 28+) fails to install on Android 7-8 (API 24-27,
+                // which support only v1+v2). AGP 8.5.2 may still emit v3-only despite these
+                // flags (verified empirically for minSdk 31), so CI additionally RE-SIGNS
+                // each release variant with `apksigner sign --v1-signing-enabled true
+                // --v2-signing-enabled true --v3-signing-enabled true` to guarantee all
+                // three schemes. CI's verify step then asserts v1+v2+v3=true + the release
+                // cert DN + the pinned cert SHA-256. (v1.4.0: minSdk 24 -> Android 7+.)
                 enableV1Signing = true
                 enableV2Signing = true
                 enableV3Signing = true

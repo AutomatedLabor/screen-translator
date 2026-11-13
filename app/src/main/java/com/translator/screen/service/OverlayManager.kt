@@ -11,6 +11,7 @@ import android.text.StaticLayout
 import android.text.TextPaint
 import android.os.Handler
 import android.os.Looper
+import android.os.Build
 import android.util.Log
 import android.view.Gravity
 import android.view.MotionEvent
@@ -157,7 +158,9 @@ class OverlayManager(
             gravity = Gravity.TOP or Gravity.START
             x = 0
             y = 0
-            layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            if (Build.VERSION.SDK_INT >= 28) {
+                layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
             setTitle("ScreenTranslatorOverlay")
         }
 
@@ -174,7 +177,9 @@ class OverlayManager(
             y = 0
             // Match the translation layer's cutout mode so the button isn't inset away
             // from the translation card's top-end on punch-hole devices. (P1-7.)
-            layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            if (Build.VERSION.SDK_INT >= 28) {
+                layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            }
             setTitle("ScreenTranslatorCloseButton")
         }
     }

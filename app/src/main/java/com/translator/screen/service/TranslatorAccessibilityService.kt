@@ -164,7 +164,14 @@ class TranslatorAccessibilityService : AccessibilityService() {
             // so node references don't go stale mid-walk when the shade
             // collapse animates and invalidates window roots.
             withContext(Dispatchers.Main) {
-                performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+                // GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE requires API 30 (Android 11).
+                // On API 24-29 the shade won't auto-collapse; the user dismisses it manually
+                // and the overlay appears once it's gone. (v1.4.0: minSdk 24 -> Android 7+.)
+                if (Build.VERSION.SDK_INT >= 30) {
+                    performGlobalAction(GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE)
+                } else {
+                    Log.i(TAG, "Dismiss-shade action unavailable on API ${Build.VERSION.SDK_INT}")
+                }
             }
             val translated = regions.mapNotNull { reg ->
                 val tr: String? = try {
@@ -195,10 +202,7 @@ class TranslatorAccessibilityService : AccessibilityService() {
             withContext(Dispatchers.Main) {
                 overlayManager?.show(translated)
                 overlayShownTimestampMs = SystemClock.uptimeMillis()
-                android.service.quicksettings.TileService.requestListeningState(
-                    applicationContext,
-                    ComponentName(applicationContext, QuickTileService::class.java),
-                )
+                requestTileListeningState()
             }
         }
     }
@@ -281,10 +285,21 @@ class TranslatorAccessibilityService : AccessibilityService() {
     private fun dismissOverlay() {
         overlayManager?.dismiss()
         overlayShownTimestampMs = 0L
-        android.service.quicksettings.TileService.requestListeningState(
-            applicationContext,
-            ComponentName(applicationContext, QuickTileService::class.java),
-        )
+        requestTileListeningState()
+    }
+
+    /**
+     * Ask the Quick Settings tile to re-query its state. TileService.requestListeningState
+     * requires API 28 (Android 9); on API 24-27 the tile is always listening (ACTIVE_TILE
+     * metadata is ignored), so the call is unnecessary + would NoSuchMethodError. (v1.4.0.)
+     */
+    private fun requestTileListeningState() {
+        if (Build.VERSION.SDK_INT >= 28) {
+            android.service.quicksettings.TileService.requestListeningState(
+                applicationContext,
+                ComponentName(applicationContext, QuickTileService::class.java),
+            )
+        }
     }
 
     /** Invoked by [OverlayManager] when the user taps the close button. */

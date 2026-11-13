@@ -76,7 +76,10 @@ class QuickTileService : TileService() {
         // Trigger translation. On a locked device, defer until the keyguard
         // is dismissed so the accessibility windows list reflects the actual
         // app under the lock screen.
-        if (isLocked) {
+        // isLocked + unlockAndRun require API 26 (Android 8). On API 24-25 (Android 7-7.1)
+        // neither exists; just trigger directly (the keyguard case is rare + the snapshot
+        // picks whatever window is available). (v1.4.0: minSdk 24 -> Android 7+.)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && isLocked) {
             unlockAndRun { service.triggerTranslation() }
         } else {
             service.triggerTranslation()
