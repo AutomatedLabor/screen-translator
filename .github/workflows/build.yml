@@ -105,13 +105,14 @@ jobs:
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: "Zipalign + sign release APKs (v1+v2+v3 for Android 7+)"
+      - name: "Zipalign + sign release APKs (v2+v3 for Android 7+)"
         # In CI, AGP leaves the release APK unsigned (signingConfig=null when CI=true) +
-        # zipaligned. We sign it here with apksigner forcing v1+v2+v3. v1 is REQUIRED for
-        # Android 7-8 (API 24-27, which support only v1+v2 — v3-only APKs fail to install).
-        # v1 also makes `keytool -printcert -jarfile` report the signer. Signing from
-        # unsigned (not re-signing) is the only reliable way to get v1 — apksigner sign on
-        # an already-signed APK does not add v1. (v1.4.0: minSdk 24 -> Android 7+.)
+        # zipaligned. We sign it here with apksigner forcing v2+v3. v2 is REQUIRED for
+        # Android 7-8 (API 24-27 — v3 alone fails to install there); v3 covers Android 9+.
+        # v1 (JAR signing) is NOT produced: apksigner refuses v1 for minSdk >= 24, and v1
+        # is unnecessary (the app's minSdk is 24, so it never installs on API < 24 where
+        # v1 would be needed). Inspect with `apksigner verify`; `keytool -printcert` will
+        # report a false "Not a signed jar file" (v1-only tool). (v1.4.0: minSdk 24.)
         env:
           TRANSLATOR_KEYSTORE_PASSWORD: ${{ secrets.TRANSLATOR_KEYSTORE_PASSWORD }}
           TRANSLATOR_KEY_ALIAS: ${{ secrets.TRANSLATOR_KEY_ALIAS }}
@@ -123,9 +124,9 @@ jobs:
           KS="$RUNNER_TEMP/translator-release.jks"
           for APK in "$REL"/*.apk; do
             NAME="$(basename "$APK")"
-            echo "=== zipalign + v1+v2+v3 sign $NAME ==="
-            # Re-zipalign (idempotent on AGP's already-aligned output) — required for v1;
-            # apksigner sign checks alignment + fails if misaligned.
+            echo "=== zipalign + v2+v3 sign $NAME ==="
+            # Re-zipalign (idempotent on AGP's already-aligned output) — good practice
+            # (aligned APK mmaps better) + avoids apksigner alignment warnings.
             zipalign -f 4 "$APK" "$APK.aligned"
             mv "$APK.aligned" "$APK"
             apksigner sign \
@@ -133,11 +134,10 @@ jobs:
               --ks-pass "pass:$TRANSLATOR_KEYSTORE_PASSWORD" \
               --ks-key-alias "$TRANSLATOR_KEY_ALIAS" \
               --key-pass "pass:$TRANSLATOR_KEY_PASSWORD" \
-              --v1-signing-enabled true \
               --v2-signing-enabled true \
               --v3-signing-enabled true \
               "$APK"
-            echo "signed $NAME (v1+v2+v3)"
+            echo "signed $NAME (v2+v3)"
           done
 
       - name: "Verify release APK signing (fail-closed, every variant)"
@@ -154,16 +154,19 @@ jobs:
             echo "=== verifying $NAME ==="
             apksigner verify --print-certs --verbose "$APK" | tee "apksigner-verify-$NAME.txt"
             grep -q "^Verifies$" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME NOT Verifies"; exit 1; }
-            grep -q "Verified using v1 scheme (JAR signing): true" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME v1 not verified (Android 7-8 + keytool need it)"; exit 1; }
-            grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME v2 not verified (Android 7+ needs it)"; exit 1; }
-            grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME v3 not verified"; exit 1; }
+            # v2+v3 required for Android 7+ (minSdk 24): v2 covers Android 7-8 (API 24-27),
+            # v3 covers Android 9+ (API 28+). v1 (JAR signing) is NOT produced — apksigner
+            # refuses v1 for minSdk >= 24 (v1 is for API < 24, which the app doesn't support).
+            grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME v2 not verified (Android 7-8 need it)"; exit 1; }
+            grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME v3 not verified (Android 9+ need it)"; exit 1; }
+            grep -q "Verified using v1 scheme (JAR signing): true" "apksigner-verify-$NAME.txt" && echo "  v1=true (keytool also works)" || echo "  v1=false (inspect with apksigner, not keytool)"
             grep -q "CN=Screen Translator Release" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME wrong DN"; exit 1; }
             if grep -q "CN=Android Debug" "apksigner-verify-$NAME.txt"; then echo "::error::$NAME debug key"; exit 1; fi
             ACTUAL="$(grep -E 'certificate SHA-256 digest:' "apksigner-verify-$NAME.txt" | sed -E 's/.*certificate SHA-256 digest: ([a-f0-9]+).*/\1/' | head -1)"
             EXPECTED="a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2"
             [ -n "$ACTUAL" ] || { echo "::error::$NAME could not parse cert SHA-256"; exit 1; }
             [ "$ACTUAL" = "$EXPECTED" ] || { echo "::error::$NAME cert SHA-256 mismatch (expected $EXPECTED got $ACTUAL) — KEY ROTATION?"; exit 1; }
-            echo "OK: $NAME — Verifies, v1+v2+v3, DN=Screen Translator Release, cert matches baseline."
+            echo "OK: $NAME — Verifies, v2+v3, DN=Screen Translator Release, cert matches baseline."
           done
           # Concatenate every variant's verify output into one release artifact.
           cat apksigner-verify-*.txt > apksigner-verify.txt
@@ -232,7 +235,7 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: v1.4.0
-          name: Screen Translator v1.4.0 (Android 7+ support + v1+v2+v3 signing)
+          name: Screen Translator v1.4.0 (Android 7+ support + v2+v3 signing)
           files: |
             screen-translator-v1.4.0-arm64-v8a-release.apk
             screen-translator-v1.4.0-arm64-v8a-release.apk.sha256
@@ -241,7 +244,7 @@ jobs:
             apksigner-verify.txt
             badging.txt
           body: |
-            # Screen Translator v1.4.0 — Android 7+ support (minSdk 24) + v1+v2+v3 signing
+            # Screen Translator v1.4.0 — Android 7+ support (minSdk 24) + v2+v3 signing
 
             Built from commit `${{ github.sha }}`.
 
@@ -257,12 +260,14 @@ jobs:
               `GLOBAL_ACTION_DISMISS_NOTIFICATION_SHADE` (API 30). On Android 7-10 the
               shade doesn't auto-collapse (the action is API 30) — the user dismisses it
               manually and the overlay appears.
-            - **v1+v2+v3 APK signing (forced).** v3-only APKs fail to install on Android
-              7-8 (API 24-27, which support only v1+v2). CI now RE-SIGNS each release
-              variant with `apksigner sign --v1-signing-enabled true --v2-signing-enabled
-              true --v3-signing-enabled true` and asserts all three schemes = true. v1
-              also means `keytool -printcert -jarfile` reports the signer (no more
-              false "Not a signed jar file").
+            - **v2+v3 APK signing (forced).** AGP emits v3-only, which fails to install on
+              Android 7-8 (API 24-27 — v3 is Android 9+ only). CI now zipaligns + signs each
+              release variant from unsigned with `apksigner sign --v2-signing-enabled true
+              --v3-signing-enabled true`, producing v2 (Android 7-8) + v3 (Android 9+).
+              v1 (JAR signing) is NOT produced: apksigner refuses v1 for minSdk >= 24, and
+              v1 is unnecessary (the app's minSdk is 24, so it never installs on API < 24
+              where v1 would matter). Inspect with `apksigner verify`; `keytool -printcert`
+              will report a false "Not a signed jar file" (v1-only tool).
             - versionCode 4 → 5, versionName 1.3.0 → 1.4.0.
 
             ## What changed in v1.3.0
@@ -312,13 +317,14 @@ jobs:
 
             ## How to verify the APK is signed
 
-            Use **`apksigner verify`** for the canonical check (v1.4.0 APKs are signed
-            with all three schemes, so `keytool -printcert -jarfile` also works now).
-            See `apksigner-verify.txt` for CI's proof.
+            Use **`apksigner verify`** for the canonical check. v1.4.0 APKs are signed
+            with v2+v3 (NOT v1), so `keytool -printcert -jarfile` will report a false
+            "Not a signed jar file" — use `apksigner` instead. See `apksigner-verify.txt`
+            for CI's proof.
 
             ```
             apksigner verify --print-certs --verbose screen-translator-v1.4.0-arm64-v8a-release.apk
-            # expect: Verifies, v1=true, v2=true, v3=true,
+            # expect: Verifies, v2=true, v3=true,
             #         Signer #1 certificate DN: CN=Screen Translator Release, O=AutomatedLabor, C=US
             #         Signer #1 certificate SHA-256 digest: a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2
             sha256sum -c screen-translator-v1.4.0-arm64-v8a-release.apk.sha256
@@ -326,10 +332,10 @@ jobs:
 
             ## Verification done by CI
 
-            - `apksigner verify` on **every** release variant → `Verifies`, **v1+v2+v3=true**
-              (Android 7+ installable), DN contains `CN=Screen Translator Release`, cert
-              SHA-256 matches pinned baseline `a0b5e5…7fa2` (no key rotation), debug key
-              explicitly rejected.
+            - `apksigner verify` on **every** release variant → `Verifies`, **v2+v3=true**
+              (v2 for Android 7-8, v3 for Android 9+ — installable on Android 7+), DN
+              contains `CN=Screen Translator Release`, cert SHA-256 matches pinned baseline
+              `a0b5e5…7fa2` (no key rotation), debug key explicitly rejected.
             - Unit tests + lint run on every push.
 
             ## Requirements
