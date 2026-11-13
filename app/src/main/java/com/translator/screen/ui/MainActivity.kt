@@ -71,6 +71,17 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Request notification permission (Android 13+) for the continuous-mode notification.
+        if (android.os.Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+                android.content.pm.PackageManager.PERMISSION_GRANTED
+        ) {
+            androidx.core.app.ActivityCompat.requestPermissions(
+                this,
+                arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                1,
+            )
+        }
         // Edge-to-edge is enforced on Android 15 (targetSdk 35); opt in explicitly so
         // the Scaffold's content padding accounts for the status-bar inset and the
         // TopAppBar doesn't slide under the status bar. (Fresh-eyes review P1-4.)

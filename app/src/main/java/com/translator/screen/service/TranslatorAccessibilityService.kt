@@ -2,11 +2,14 @@ package com.translator.screen.service
 
 import android.accessibilityservice.AccessibilityService
 import android.content.ComponentName
+import android.app.NotificationChannel
+import android.app.NotificationManager
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.util.Log
 import android.widget.Toast
+import androidx.core.app.NotificationCompat
 import com.translator.screen.R
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityWindowInfo
@@ -82,6 +85,7 @@ class TranslatorAccessibilityService : AccessibilityService() {
         engine = MlKitTranslationEngine(LanguagePrefs.getTargetTag(applicationContext))
             .also { it.warmup() }
         overlayManager = OverlayManager(applicationContext) { onOverlayCloseRequested() }
+        createNotificationChannel()
         Log.i(TAG, "Service connected, engine warmed up (target=${LanguagePrefs.getTargetTag(applicationContext)})")
     }
 
@@ -293,12 +297,44 @@ class TranslatorAccessibilityService : AccessibilityService() {
         }
     }
 
-    /** Stop continuous mode + dismiss the overlay. */
+    /** Stop continuous mode + dismiss the overlay + cancel the notification. */
     fun stopContinuousMode() {
         continuousHandler.removeCallbacks(retranslateRunnable)
         continuousMode = false
         continuousTargetPackage = null
+        cancelContinuousNotification()
         dismissOverlay()
+    }
+
+    /** Show a persistent notification while continuous (live) mode is active, so the user
+     *  knows translation is running + can see it in the shade. (v1.9.0.) */
+    private fun showContinuousNotification() {
+        val notification = NotificationCompat.Builder(this, CONTINUOUS_NOTIFICATION_CHANNEL_ID)
+            .setSmallIcon(R.drawable.ic_translate_tile)
+            .setContentTitle(getString(R.string.app_name))
+            .setContentText(getString(R.string.continuous_mode_active))
+            .setOngoing(true)
+            .setSilent(true)
+            .build()
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .notify(CONTINUOUS_NOTIFICATION_ID, notification)
+    }
+
+    private fun cancelContinuousNotification() {
+        (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+            .cancel(CONTINUOUS_NOTIFICATION_ID)
+    }
+
+    private fun createNotificationChannel() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                CONTINUOUS_NOTIFICATION_CHANNEL_ID,
+                getString(R.string.continuous_mode_active),
+                NotificationManager.IMPORTANCE_LOW,
+            )
+            (getSystemService(NOTIFICATION_SERVICE) as NotificationManager)
+                .createNotificationChannel(channel)
+        }
     }
 
     /**
@@ -351,6 +387,7 @@ class TranslatorAccessibilityService : AccessibilityService() {
                     continuousMode = true
                     continuousTargetPackage = target
                     requestTileListeningState()
+                    if (initial) showContinuousNotification()
                 } else {
                     // Smooth in-place update (no dismiss+re-add flicker).
                     overlayManager?.update(translated)
@@ -457,6 +494,8 @@ class TranslatorAccessibilityService : AccessibilityService() {
         private const val TAG = "TranslatorAccessibilityService"
         private const val OVERLAY_GRACE_PERIOD_MS = 350L
         private const val CONTINUOUS_DEBOUNCE_MS = 400L
+        private const val CONTINUOUS_NOTIFICATION_CHANNEL_ID = "screen_translator_continuous"
+        private const val CONTINUOUS_NOTIFICATION_ID = 1
 
         @Volatile
         var instance: TranslatorAccessibilityService? = null
