@@ -3,10 +3,13 @@ package com.translator.screen
 import android.view.View
 import android.view.ViewGroup
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityNodeInfo
 import android.widget.TextView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
+import androidx.test.platform.app.InstrumentationRegistry
 import com.google.common.truth.Truth.assertThat
+import com.translator.screen.extract.ScreenTextExtractor
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -68,6 +71,34 @@ class ScreenTextExtractorInstrumentedTest {
                 // accessibility tree for the extractor to see).
                 assertThat(collected).contains("Sendungsnummer: DHL1234567890")
             }
+        }
+    }
+
+    @Test
+    fun extractorWalksRealAccessibilityTree() {
+        // Run the REAL ScreenTextExtractor against a live AccessibilityNodeInfo tree
+        // obtained via UiAutomation (the same source the accessibility service uses).
+        // This is the closest an instrumented test can get to the on-device pipeline
+        // without enabling the accessibility service (which requires ADB + user confirmation).
+        ActivityScenario.launch(FlagSecureTestActivity::class.java).use {
+            val uiAutomation = InstrumentationRegistry.getInstrumentation().uiAutomation
+            // Poll for the activity's root node (it may take a few frames to populate).
+            var root: AccessibilityNodeInfo? = null
+            for (attempt in 1..25) {
+                val candidate = uiAutomation.rootInActiveWindow
+                if (candidate != null && candidate.packageName == "com.translator.screen") {
+                    root = candidate
+                    break
+                }
+                Thread.sleep(200)
+            }
+            assertThat(root).isNotNull()
+            val regions = ScreenTextExtractor().extract(root!!)
+            // The activity renders 6 TextViews; dedup/grouping may merge some. At least 3.
+            assertThat(regions.size).isAtLeast(3)
+            val allText = regions.joinToString("\n") { it.text }
+            assertThat(allText).contains("Sendungsnummer")
+            assertThat(allText).contains("Paket befindet sich auf dem Weg")
         }
     }
 

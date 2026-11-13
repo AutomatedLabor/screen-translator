@@ -179,9 +179,9 @@ jobs:
           for APK in "$REL"/*.apk; do
             NAME="$(basename "$APK" .apk)"
             case "$NAME" in
-              *arm64-v8a*) ASSET="screen-translator-v1.6.0-arm64-v8a-release" ;;
-              *universal*) ASSET="screen-translator-v1.6.0-universal-release" ;;
-              *)           ASSET="screen-translator-v1.6.0-release" ;;
+              *arm64-v8a*) ASSET="screen-translator-v1.7.0-arm64-v8a-release" ;;
+              *universal*) ASSET="screen-translator-v1.7.0-universal-release" ;;
+              *)           ASSET="screen-translator-v1.7.0-release" ;;
             esac
             ( cd "$REL" && sha256sum "$(basename "$APK")" > "$ASSET.apk.sha256" )
             cp "$APK" "$STAGE/$ASSET.apk"
@@ -189,8 +189,8 @@ jobs:
             echo "staged $ASSET.apk ($(wc -c < "$STAGE/$ASSET.apk") bytes)  sha256: $(awk '{print $1}' "$STAGE/$ASSET.apk.sha256")"
           done
           # Badging from the arm64 variant (primary); fall back to universal.
-          ARM="$STAGE/screen-translator-v1.6.0-arm64-v8a-release.apk"
-          [ -f "$ARM" ] || ARM="$STAGE/screen-translator-v1.6.0-universal-release.apk"
+          ARM="$STAGE/screen-translator-v1.7.0-arm64-v8a-release.apk"
+          [ -f "$ARM" ] || ARM="$STAGE/screen-translator-v1.7.0-universal-release.apk"
           aapt dump badging "$ARM" | head -25 | tee badging.txt
 
       - name: Upload release APKs artifact
@@ -232,19 +232,33 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          tag_name: v1.6.0
-          name: Screen Translator v1.6.0 (continuous live translation + model-downloaded check)
+          tag_name: v1.7.0
+          name: Screen Translator v1.7.0 (instrumented emulator test + CI hardening)
           files: |
-            screen-translator-v1.6.0-arm64-v8a-release.apk
-            screen-translator-v1.6.0-arm64-v8a-release.apk.sha256
-            screen-translator-v1.6.0-universal-release.apk
-            screen-translator-v1.6.0-universal-release.apk.sha256
+            screen-translator-v1.7.0-arm64-v8a-release.apk
+            screen-translator-v1.7.0-arm64-v8a-release.apk.sha256
+            screen-translator-v1.7.0-universal-release.apk
+            screen-translator-v1.7.0-universal-release.apk.sha256
             apksigner-verify.txt
             badging.txt
           body: |
-            # Screen Translator v1.6.0 — continuous live translation + model-downloaded check
+            # Screen Translator v1.7.0 — instrumented emulator test + CI hardening
 
             Built from commit `${{ github.sha }}`.
+
+            ## What changed in v1.7.0
+
+            - **Instrumented test on a real emulator (the "test it yourself" job).** Added a
+              CI job that boots an x86_64 Android emulator (API 30, with KVM on the GitHub
+              runner — no KVM in the local sandbox) + runs `connectedDebugAndroidTest`. New
+              test `extractorWalksRealAccessibilityTree` launches the German `FlagSecureTestActivity`,
+              obtains a live `AccessibilityNodeInfo` root via UiAutomation (the same source the
+              accessibility service uses), runs the REAL `ScreenTextExtractor.extract()` against
+              it, + asserts the German text is found. This is the closest an automated test can
+              get to the on-device extraction pipeline without enabling the accessibility service.
+            - `reactivecircus/android-emulator-runner` pinned to a commit SHA (supply-chain).
+            - versionCode 7 → 8, versionName 1.6.0 → 1.7.0. (APK behavior identical to v1.6.0 —
+              the instrumented test is in the androidTest sourceset, not the shipped app.)
 
             ## What changed in v1.6.0
 
@@ -329,8 +343,8 @@ jobs:
 
             | APK | Size | Install on |
             |---|---|---|
-            | `screen-translator-v1.6.0-arm64-v8a-release.apk` | ~22 MB | **Any phone from ~2017** (Pixel, Samsung, OnePlus, Xiaomi, etc. — 64-bit ARM). Try this first. |
-            | `screen-translator-v1.6.0-universal-release.apk` | ~72 MB | 32-bit ARM phones (pre-2017), x86 emulators, rare x86 devices. Fallback. |
+            | `screen-translator-v1.7.0-arm64-v8a-release.apk` | ~22 MB | **Any phone from ~2017** (Pixel, Samsung, OnePlus, Xiaomi, etc. — 64-bit ARM). Try this first. |
+            | `screen-translator-v1.7.0-universal-release.apk` | ~72 MB | 32-bit ARM phones (pre-2017), x86 emulators, rare x86 devices. Fallback. |
 
             ## Install
 
@@ -353,11 +367,11 @@ jobs:
             for CI's proof.
 
             ```
-            apksigner verify --print-certs --verbose screen-translator-v1.6.0-arm64-v8a-release.apk
+            apksigner verify --print-certs --verbose screen-translator-v1.7.0-arm64-v8a-release.apk
             # expect: Verifies, v2=true, v3=true,
             #         Signer #1 certificate DN: CN=Screen Translator Release, O=AutomatedLabor, C=US
             #         Signer #1 certificate SHA-256 digest: a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2
-            sha256sum -c screen-translator-v1.6.0-arm64-v8a-release.apk.sha256
+            sha256sum -c screen-translator-v1.7.0-arm64-v8a-release.apk.sha256
             ```
 
             ## Verification done by CI
@@ -366,7 +380,7 @@ jobs:
               (v2 for Android 7-8, v3 for Android 9+ — installable on Android 7+), DN
               contains `CN=Screen Translator Release`, cert SHA-256 matches pinned baseline
               `a0b5e5…7fa2` (no key rotation), debug key explicitly rejected.
-            - Unit tests + lint run on every push.
+            - Unit tests + lint + **instrumented emulator tests** run on every push.
 
             ## Requirements
 
@@ -375,3 +389,47 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ---------------------------------------------------------------------------
+  # Instrumented tests on a real (emulated) Android device — the "test it yourself"
+  # job. Boots an x86_64 emulator (API 30, with KVM on the GitHub runner) + runs the
+  # ScreenTextExtractor against a live AccessibilityNodeInfo tree via UiAutomation,
+  # verifying the extraction pipeline works on a real device (not just Robolectric).
+  # ---------------------------------------------------------------------------
+  instrumented-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4
+        with:
+          java-version: '17'
+          distribution: 'temurin'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407  # v3
+        with:
+          packages: 'platform-tools platforms;android-30 platforms;android-35'
+
+      - name: Make gradlew executable
+        run: chmod +x gradlew
+
+      - name: Run instrumented tests on emulator (API 30, x86_64)
+        uses: reactivecircus/android-emulator-runner@a421e43855164a8197daf9d8d40fe71c6996bb0d  # v2
+        with:
+          api-level: 30
+          arch: x86_64
+          target: google_apis
+          emulator-options: -no-window -gpu swiftshader_indirect -no-snapshot -noaudio -no-boot-anim
+          disable-animations: true
+          script: ./gradlew :app:connectedDebugAndroidTest --no-daemon --stacktrace
+
+      - name: Upload instrumented test results
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
+        with:
+          name: instrumented-test-results
+          path: app/build/outputs/androidTest-results/connected/**/*.xml
+          if-no-files-found: ignore
