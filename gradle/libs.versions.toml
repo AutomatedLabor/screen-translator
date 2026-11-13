@@ -1,21 +1,21 @@
 [versions]
 agp = "8.5.2"
-kotlin = "2.0.21"
-coreKtx = "1.13.1"
+kotlin = "2.4.21"
+coreKtx = "1.19.1"
 lifecycle = "2.8.6"
 activityCompose = "1.9.2"
 composeBom = "2024.09.00"
 mlkitTranslate = "17.0.3"
 mlkitLanguageId = "17.0.6"
-coroutines = "1.8.1"
+coroutines = "1.11.0"
 junit = "4.13.2"
 androidxJunit = "1.2.1"
 espresso = "3.6.1"
-robolectric = "4.13"
+robolectric = "4.17"
 androidxTestCore = "1.6.1"
 androidxTestRunner = "1.6.2"
 androidxTestRules = "1.6.1"
-truth = "1.4.4"
+truth = "1.4.5"
 
 [libraries]
 androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "coreKtx" }
