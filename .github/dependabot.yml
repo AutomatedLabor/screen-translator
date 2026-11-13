@@ -1,0 +1,50 @@
+# Dependabot configuration for Screen Translator.
+# Docs: https://docs.github.com/en/code-security/dependabot/dependabot-version-updates/configuration-options-for-the-dependabot.yml-file
+
+version: 2
+
+updates:
+  # GitHub Actions used in .github/workflows/*.yml
+  # (build.yml pins some actions to SHAs for supply-chain integrity — Dependabot will still
+  # open PRs to bump the *commented* version marker; review each one manually before merging,
+  # and re-pin to a new SHA, do not switch back to a floating @vN tag.)
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    groups:
+      actions-minor:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "ci(deps)"
+      include: scope
+    labels:
+      - dependencies
+      - github-actions
+
+  # Gradle / version catalog (gradle/libs.versions.toml + build.gradle.kts)
+  - package-ecosystem: gradle
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+      timezone: UTC
+    open-pull-requests-limit: 5
+    groups:
+      gradle-minor:
+        update-types:
+          - minor
+          - patch
+    commit-message:
+      prefix: "build(deps)"
+      include: scope
+    labels:
+      - dependencies
+      - gradle

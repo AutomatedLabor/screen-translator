@@ -133,6 +133,43 @@ com.translator.screen/
 ML Kit `translate:17.0.3` + `language-id:17.0.6` · `kotlinx-coroutines` 1.8.1 ·
 minSdk 24 / targetSdk 35 / compileSdk 35.
 
+### Architecture diagram
+
+End-to-end flow from the Quick Settings tile tap to the rendered overlay. Solid arrows are
+calls within the service; the dashed feedback arrow is the live target-language switch the
+tile picks up via shared `SharedPreferences`.
+
+```mermaid
+flowchart TD
+    User([User taps<br/>"Translate Screen" tile])
+    Tile[QuickTileService<br/>state sync + unlockAndRun]
+    A11y[TranslatorAccessibilityService<br/>host coroutine]
+
+    subgraph Pipeline [Per-tap pipeline inside the service]
+        direction TB
+        Pick[pickTargetWindow<br/>topmost app window, by layer]
+        Extract[ScreenTextExtractor<br/>DFS walk, dedup, line grouping<br/>max 500 nodes / depth 30]
+        Filter[ML Kit Language ID<br/>skip numbers / URLs / English]
+        Translate[MlKitTranslationEngine<br/>German → target, LruCache 500]
+        Overlay[OverlayManager<br/>TYPE_ACCESSIBILITY_OVERLAY<br/>translation cards + ✕ button]
+    end
+
+    Prefs[(LanguagePrefs<br/>target-language tag)]
+
+    User --> Tile --> A11y
+    A11y --> Pick --> Extract --> Filter --> Translate --> Overlay
+    Overlay -.renders on top of.-> Screen[(Target app screen<br/>German text)]
+    Overlay -.dismiss on scroll / ✕ / app switch.-> Tile
+    Prefs -.read live.-> Translate
+    Prefs -.read live.-> Tile
+
+    classDef service fill:#e3f2fd,stroke:#1565c0,color:#0d47a1
+    classDef data fill:#fff3e0,stroke:#e65100,color:#bf360c
+    class Tile,A11y service
+    class Pick,Extract,Filter,Translate,Overlay service
+    class Prefs,Screen data
+```
+
 ## Security
 
 - **Dedicated release signing key** (`CN=Screen Translator Release, O=AutomatedLabor`, RSA 2048,

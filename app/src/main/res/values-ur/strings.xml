@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">اسکرین ٹرانسلیٹر</string>
+    <string name="accessibility_service_label">اسکرین کا ترجمہ کریں</string>
+    <string name="accessibility_service_description">اسکرین پر موجود جرمن زبان کے متن کا انگریزی میں ترجمہ کرتا ہے۔ یہ فوری ترتیبات (Quick Settings) ٹائل سے چلایا جاتا ہے؛ یہ ڈیوائس پر موجود ML Kit ترجمہ استعمال کرتا ہے اور نتائج ایک رسائیOverlay کے طور پر دکھاتا ہے۔ یہ ضروری ہے تاکہ ٹائل موجودہ اسکرین پڑھ سکے اور ترجمہ کارڈز دکھا سکے۔</string>
+    <string name="quick_tile_label">اسکرین کا ترجمہ کریں</string>
+    <string name="main_activity_title">اسکرین ٹرانسلیٹر — ترتیب</string>
+
+    <string name="card_accessibility_title">رسائی سروس</string>
+    <string name="card_accessibility_status_on">فعال</string>
+    <string name="card_accessibility_status_off">غیر فعال</string>
+    <string name="card_accessibility_open_settings">رسائی ترتیبات کھولیں</string>
+    <string name="card_accessibility_help_header">فعال کرنے کا طریقہ (اینڈرائیڈ 13+)</string>
+    <string name="card_accessibility_help_body">چونکہ یہ ایک سائڈ-لوڈ کردہ APK ہے، اینڈرائیڈ 13+ معمولی رسائی اسکرین سے سروس کو فعال کرنے سے روکتا ہے۔ اجازت دینے کے لیے: 1) ایپ آئیکن کو دبائے رکھیں → ایپ معلومات → تین نقطوں والا مینو → „محدود ترتیبات کی اجازت دیں“۔ 2) پھر واپس جائیں ترتیبات → رسائی → اسکرین ٹرانسلیٹر → فعال کریں۔</string>
+
+    <string name="card_model_title">آف لائن ترجمہ ماڈل</string>
+    <string name="card_model_status_downloaded">ماڈل ڈاؤن لوڈ ہو گیا — تیار</string>
+    <string name="card_model_status_not_downloaded">ماڈل ڈاؤن لوڈ نہیں ہوا</string>
+    <string name="card_model_download">ماڈل ڈاؤن لوڈ کریں</string>
+    <string name="card_model_test">ترجمہ آزمائیں</string>
+
+    <string name="card_target_title">ہدف زبان</string>
+    <string name="card_target_body">اسکرین پر موجود جرمن متن کا ترجمہ اس زبان میں کیا جاتا ہے۔ یہ تبدیلی فوری طور پر نیچے دیے گئے ٹیسٹ اور فوری ترتیبات ٹائل دونوں پر لاگو ہو جاتی ہے (رسائی سروس کو دوبارہ فعال کرنے کی ضرورت نہیں)۔</string>
+
+    <string name="card_tile_title">فوری ترتیبات ٹائل</string>
+    <string name="card_tile_body">شیڈ کو دو بار نیچے کھینچیں → ترمیم → „اسکرین کا ترجمہ کریں“ ٹائل کو فعال قطار میں کھینچ لائیں۔ پھر کوئی بھی جرمن ایپ کھولیں اور اسکرین کا ترجمہ کرنے کے لیے ٹائل پر ٹیپ کریں۔</string>
+
+    <string name="sample_german_text">Der Schnellzugriff übersetzt deutschen Bildschirmtext ins Englische.</string>
+    <string name="close_overlay">اوورلے بند کریں</string>
+    <string name="model_download_in_progress">ماڈل ڈاؤن لوڈ ہو رہا ہے…</string>
+    <string name="model_download_failed">ڈاؤن لوڈ ناکام ہوا</string>
+    <string name="translation_test_placeholder">ترجمہ یہاں نظر آئے گا۔</string>
+    <string name="model_not_downloaded_toast">پہلے ماڈل ڈاؤن لوڈ کریں — ایپ کھولیں اور ڈاؤن لوڈ ماڈل پر ٹیپ کریں۔</string>
+    <string name="continuous_mode_active">لائیو ترجمہ فعال — روکنے کے لیے ✕ یا ٹائل پر ٹیپ کریں</string>
+</resources>

@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Bildschirm-Übersetzer</string>
+    <string name="accessibility_service_label">Bildschirm übersetzen</string>
+    <string name="accessibility_service_description">Übersetzt deutschen Bildschirmtext ins Englische. Wird über die Schnelleinstellungen-Kachel ausgelöst; verwendet auf dem Gerät ausgeführte ML Kit-Übersetzung und zeigt die Ergebnisse als Overlay an. Erforderlich, damit die Kachel den aktuellen Bildschirm lesen und Übersetzungskarten anzeigen kann.</string>
+    <string name="quick_tile_label">Bildschirm übersetzen</string>
+    <string name="main_activity_title">Bildschirm-Übersetzer — Einrichtung</string>
+
+    <string name="card_accessibility_title">Bedienhilfen-Dienst</string>
+    <string name="card_accessibility_status_on">Aktiviert</string>
+    <string name="card_accessibility_status_off">Deaktiviert</string>
+    <string name="card_accessibility_open_settings">Bedienhilfen-Einstellungen öffnen</string>
+    <string name="card_accessibility_help_header">So aktivieren Sie es (Android 13+)</string>
+    <string name="card_accessibility_help_body">Da es sich um eine per Sideload installierte APK handelt, blockiert Android 13+ das Aktivieren des Dienstes über den regulären Bedienhilfen-Bildschirm. So erlauben Sie es: 1) App-Symbol lange drücken → App-Info → Dreipunkt-Menü → „Eingeschränkte Einstellungen zulassen“. 2) Danach zurück zu Einstellungen → Bedienhilfen → Bildschirm-Übersetzer → aktivieren.</string>
+
+    <string name="card_model_title">Offline-Übersetzungsmodell</string>
+    <string name="card_model_status_downloaded">Modell heruntergeladen — bereit</string>
+    <string name="card_model_status_not_downloaded">Modell nicht heruntergeladen</string>
+    <string name="card_model_download">Modell herunterladen</string>
+    <string name="card_model_test">Übersetzung testen</string>
+
+    <string name="card_target_title">Zielsprache</string>
+    <string name="card_target_body">Deutscher Bildschirmtext wird in diese Sprache übersetzt. Die Änderung wird sofort sowohl für den Test unten als auch für die Schnelleinstellungen-Kachel wirksam (Bedienhilfen müssen nicht neu aktiviert werden).</string>
+
+    <string name="card_tile_title">Schnelleinstellungen-Kachel</string>
+    <string name="card_tile_body">Shade zweimal nach unten ziehen → Bearbeiten → die „Bildschirm übersetzen“-Kachel in die aktive Reihe ziehen. Öffnen Sie dann eine beliebige deutsche App und tippen Sie auf die Kachel, um den Bildschirm zu übersetzen.</string>
+
+    <string name="sample_german_text">Der Schnellzugriff übersetzt deutschen Bildschirmtext ins Englische.</string>
+    <string name="close_overlay">Overlay schließen</string>
+    <string name="model_download_in_progress">Modell wird heruntergeladen…</string>
+    <string name="model_download_failed">Download fehlgeschlagen</string>
+    <string name="translation_test_placeholder">Übersetzung erscheint hier.</string>
+    <string name="model_not_downloaded_toast">Laden Sie zuerst das Modell herunter — öffnen Sie die App und tippen Sie auf Modell herunterladen.</string>
+    <string name="continuous_mode_active">Live-Übersetzung aktiv — tippen Sie auf ✕ oder die Kachel zum Stoppen</string>
+</resources>
