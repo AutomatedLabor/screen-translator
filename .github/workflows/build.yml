@@ -18,28 +18,26 @@ jobs:
 
     steps:
       - name: Checkout source
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262  # v4
 
       - name: Validate Gradle wrapper jar
-        uses: gradle/wrapper-validation-action@v3
+        uses: gradle/wrapper-validation-action@f9c9c575b8b21b6485636a91ffecd10e558c62f6  # v3
 
-      - name: "Scan for leaked secrets (gitleaks, advisory)"
-        # Advisory for now (continue-on-error) so a false positive on the public cert
-        # SHA-256 fingerprint doesn't block the build. Tighten to fail-closed once
-        # confirmed clean across a few runs. (Council P1-4 / supply-chain.)
-        continue-on-error: true
-        uses: gitleaks/gitleaks-action@v2
+      - name: "Scan for leaked secrets (gitleaks, fail-closed)"
+        # v1.4.0 confirmed clean ("no leaks found"). Now fail-closed: any secret (PAT,
+        # keystore password, API key) committed blocks the build. (Council P1-4 / supply-chain.)
+        uses: gitleaks/gitleaks-action@ff98106e4c7b2bc287b24eaf42907196329070c7  # v2
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Set up JDK 17
-        uses: actions/setup-java@v4
+        uses: actions/setup-java@cf277c60eb25467037889841efdb72551f06f6c3  # v4
         with:
           java-version: '17'
           distribution: 'temurin'
 
       - name: Set up Android SDK
-        uses: android-actions/setup-android@v3
+        uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407  # v3
         with:
           packages: 'platform-tools platforms;android-35 build-tools;35.0.0 platforms;android-31'
 
@@ -83,7 +81,7 @@ jobs:
         run: chmod +x gradlew
 
       - name: Cache Gradle dependencies
-        uses: actions/cache@v4
+        uses: actions/cache@0057852bfaa89a56745cba8c7296529d2fc39830  # v4
         with:
           path: |
             ~/.gradle/caches
@@ -181,9 +179,9 @@ jobs:
           for APK in "$REL"/*.apk; do
             NAME="$(basename "$APK" .apk)"
             case "$NAME" in
-              *arm64-v8a*) ASSET="screen-translator-v1.4.0-arm64-v8a-release" ;;
-              *universal*) ASSET="screen-translator-v1.4.0-universal-release" ;;
-              *)           ASSET="screen-translator-v1.4.0-release" ;;
+              *arm64-v8a*) ASSET="screen-translator-v1.5.0-arm64-v8a-release" ;;
+              *universal*) ASSET="screen-translator-v1.5.0-universal-release" ;;
+              *)           ASSET="screen-translator-v1.5.0-release" ;;
             esac
             ( cd "$REL" && sha256sum "$(basename "$APK")" > "$ASSET.apk.sha256" )
             cp "$APK" "$STAGE/$ASSET.apk"
@@ -191,12 +189,12 @@ jobs:
             echo "staged $ASSET.apk ($(wc -c < "$STAGE/$ASSET.apk") bytes)  sha256: $(awk '{print $1}' "$STAGE/$ASSET.apk.sha256")"
           done
           # Badging from the arm64 variant (primary); fall back to universal.
-          ARM="$STAGE/screen-translator-v1.4.0-arm64-v8a-release.apk"
-          [ -f "$ARM" ] || ARM="$STAGE/screen-translator-v1.4.0-universal-release.apk"
+          ARM="$STAGE/screen-translator-v1.5.0-arm64-v8a-release.apk"
+          [ -f "$ARM" ] || ARM="$STAGE/screen-translator-v1.5.0-universal-release.apk"
           aapt dump badging "$ARM" | head -25 | tee badging.txt
 
       - name: Upload release APKs artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: screen-translator-release-apks
           path: |
@@ -209,7 +207,7 @@ jobs:
           retention-days: 90
 
       - name: Upload debug APK artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: screen-translator-debug-apk
           path: app/build/outputs/apk/debug/*.apk
@@ -218,35 +216,49 @@ jobs:
 
       - name: Upload unit test results
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: unit-test-results
           path: app/build/test-results/testDebugUnitTest/*.xml
 
       - name: Upload lint report
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02  # v4
         with:
           name: lint-report
           path: app/build/reports/lint-results-*.html
           if-no-files-found: ignore
 
       - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65  # v2
         with:
-          tag_name: v1.4.0
-          name: Screen Translator v1.4.0 (Android 7+ support + v2+v3 signing)
+          tag_name: v1.5.0
+          name: Screen Translator v1.5.0 (polished README + gitleaks fail-closed + action SHA pinning)
           files: |
-            screen-translator-v1.4.0-arm64-v8a-release.apk
-            screen-translator-v1.4.0-arm64-v8a-release.apk.sha256
-            screen-translator-v1.4.0-universal-release.apk
-            screen-translator-v1.4.0-universal-release.apk.sha256
+            screen-translator-v1.5.0-arm64-v8a-release.apk
+            screen-translator-v1.5.0-arm64-v8a-release.apk.sha256
+            screen-translator-v1.5.0-universal-release.apk
+            screen-translator-v1.5.0-universal-release.apk.sha256
             apksigner-verify.txt
             badging.txt
           body: |
-            # Screen Translator v1.4.0 — Android 7+ support (minSdk 24) + v2+v3 signing
+            # Screen Translator v1.5.0 — polished README + gitleaks fail-closed + action SHA pinning
 
             Built from commit `${{ github.sha }}`.
+
+            ## What changed in v1.5.0
+
+            - **Polished README** (learned from NewPipe 40k★ / Termux 64k★): centered icon +
+              tagline, badges row (CI / release / license / minSdk / targetSdk / signing),
+              nav bar, generated hero image, structured sections (Features → How it works →
+              Install → Architecture → Security → Verify → Build → Roadmap → License), GitHub
+              callouts. Added MIT LICENSE + assets/icon.png + assets/hero.png.
+            - **gitleaks fail-closed.** v1.4.0 confirmed clean ("no leaks found"); removed
+              `continue-on-error` so any committed secret blocks the build.
+            - **GitHub Actions pinned to commit SHAs** (supply-chain hardening — no more
+              `@v4`/`@v3` mutable tags): checkout, wrapper-validation, gitleaks, setup-java,
+              setup-android, cache, upload-artifact, action-gh-release.
+            - versionCode 5 → 6, versionName 1.4.0 → 1.5.0.
 
             ## What changed in v1.4.0
 
@@ -299,8 +311,8 @@ jobs:
 
             | APK | Size | Install on |
             |---|---|---|
-            | `screen-translator-v1.4.0-arm64-v8a-release.apk` | ~22 MB | **Any phone from ~2017** (Pixel, Samsung, OnePlus, Xiaomi, etc. — 64-bit ARM). Try this first. |
-            | `screen-translator-v1.4.0-universal-release.apk` | ~72 MB | 32-bit ARM phones (pre-2017), x86 emulators, rare x86 devices. Fallback. |
+            | `screen-translator-v1.5.0-arm64-v8a-release.apk` | ~22 MB | **Any phone from ~2017** (Pixel, Samsung, OnePlus, Xiaomi, etc. — 64-bit ARM). Try this first. |
+            | `screen-translator-v1.5.0-universal-release.apk` | ~72 MB | 32-bit ARM phones (pre-2017), x86 emulators, rare x86 devices. Fallback. |
 
             ## Install
 
@@ -323,11 +335,11 @@ jobs:
             for CI's proof.
 
             ```
-            apksigner verify --print-certs --verbose screen-translator-v1.4.0-arm64-v8a-release.apk
+            apksigner verify --print-certs --verbose screen-translator-v1.5.0-arm64-v8a-release.apk
             # expect: Verifies, v2=true, v3=true,
             #         Signer #1 certificate DN: CN=Screen Translator Release, O=AutomatedLabor, C=US
             #         Signer #1 certificate SHA-256 digest: a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2
-            sha256sum -c screen-translator-v1.4.0-arm64-v8a-release.apk.sha256
+            sha256sum -c screen-translator-v1.5.0-arm64-v8a-release.apk.sha256
             ```
 
             ## Verification done by CI
