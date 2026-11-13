@@ -21,7 +21,7 @@ import kotlinx.coroutines.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
- * ML Kit on-device translator (German → English).
+ * ML Kit on-device translator (German → targetLanguageTag).
  *
  * - Lazily creates the [Translator] and [LanguageIdentifier] under [initLock] with
  *   double-checked locking.
@@ -35,7 +35,9 @@ import java.util.concurrent.atomic.AtomicBoolean
  *
  * All suspending entry points are main-safe: ML work runs on [Dispatchers.Default].
  */
-class MlKitTranslationEngine : ITranslationEngine {
+class MlKitTranslationEngine(
+  override val targetLanguageTag: String = "en",
+) : ITranslationEngine {
 
   private var translator: Translator? = null
   private var languageIdentifier: LanguageIdentifier? = null
@@ -189,11 +191,11 @@ class MlKitTranslationEngine : ITranslationEngine {
       try {
         val mgr = RemoteModelManager.getInstance()
         val deModel = TranslateRemoteModel.Builder(TranslateLanguage.GERMAN).build()
-        val enModel = TranslateRemoteModel.Builder(TranslateLanguage.ENGLISH).build()
+        val targetModel = TranslateRemoteModel.Builder(targetTranslateLanguage()).build()
         val deReady = mgr.isModelDownloaded(deModel).await()
-        val enReady = mgr.isModelDownloaded(enModel).await()
-        Log.d(TAG, "isModelDownloaded: de=$deReady en=$enReady")
-        deReady && enReady
+        val targetReady = mgr.isModelDownloaded(targetModel).await()
+        Log.d(TAG, "isModelDownloaded: de=$deReady target=$targetReady ($targetLanguageTag)")
+        deReady && targetReady
       } catch (e: Exception) {
         Log.d(TAG, "isModelDownloaded failure: ${e.message}")
         false
@@ -237,6 +239,9 @@ class MlKitTranslationEngine : ITranslationEngine {
   // Internals
   // -------------------------------------------------------------------------
 
+  private fun targetTranslateLanguage(): String =
+    TranslateLanguage.fromLanguageTag(targetLanguageTag) ?: TranslateLanguage.ENGLISH
+
   private fun getOrCreateTranslator(): Translator? {
     // P1-8: never (re)create after close(). Previously, a warmup() GlobalScope launch
     // racing with close() would enter here, find translator==null (close() nulled it),
@@ -248,7 +253,7 @@ class MlKitTranslationEngine : ITranslationEngine {
       translator?.let { return it }
       val options = TranslatorOptions.Builder()
         .setSourceLanguage(TranslateLanguage.GERMAN)
-        .setTargetLanguage(TranslateLanguage.ENGLISH)
+        .setTargetLanguage(targetTranslateLanguage())
         .build()
       val t = Translation.getClient(options)
       translator = t

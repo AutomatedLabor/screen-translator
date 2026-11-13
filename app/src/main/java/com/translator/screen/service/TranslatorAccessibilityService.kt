@@ -12,6 +12,7 @@ import com.translator.screen.extract.TranslatedTextRegion
 import com.translator.screen.translate.ITranslationEngine
 import com.translator.screen.translate.MlKitTranslationEngine
 import com.translator.screen.util.PackageUtils
+import com.translator.screen.util.LanguagePrefs
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
@@ -64,9 +65,10 @@ class TranslatorAccessibilityService : AccessibilityService() {
     override fun onServiceConnected() {
         super.onServiceConnected()
         instance = this
-        engine = MlKitTranslationEngine().also { it.warmup() }
+        engine = MlKitTranslationEngine(LanguagePrefs.getTargetTag(applicationContext))
+            .also { it.warmup() }
         overlayManager = OverlayManager(applicationContext) { onOverlayCloseRequested() }
-        Log.i(TAG, "Service connected, engine warmed up")
+        Log.i(TAG, "Service connected, engine warmed up (target=${LanguagePrefs.getTargetTag(applicationContext)})")
     }
 
     override fun onDestroy() {
@@ -207,6 +209,23 @@ class TranslatorAccessibilityService : AccessibilityService() {
     /** Public dismiss entry point for the Quick Settings tile's toggle-off path. */
     fun dismissOverlayPublic() {
         dismissOverlay()
+    }
+
+    /**
+     * Live-switch the translation target language (called by MainActivity when the user
+     * changes the dropdown). Closes the old engine and creates a new one with the new
+     * target; the next [triggerTranslation] uses it. No-op if [tag] matches the current
+     * target or the service isn't connected.
+     */
+    fun updateTargetLanguage(tag: String) {
+        val current = engine?.targetLanguageTag
+        if (current == tag) {
+            Log.i(TAG, "updateTargetLanguage: already $tag; no-op")
+            return
+        }
+        Log.i(TAG, "updateTargetLanguage: $current -> $tag")
+        engine?.close()
+        engine = MlKitTranslationEngine(tag).also { it.warmup() }
     }
 
     // -------------------------------------------------------------------------

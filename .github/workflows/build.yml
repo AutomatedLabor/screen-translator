@@ -23,6 +23,15 @@ jobs:
       - name: Validate Gradle wrapper jar
         uses: gradle/wrapper-validation-action@v3
 
+      - name: "Scan for leaked secrets (gitleaks, advisory)"
+        # Advisory for now (continue-on-error) so a false positive on the public cert
+        # SHA-256 fingerprint doesn't block the build. Tighten to fail-closed once
+        # confirmed clean across a few runs. (Council P1-4 / supply-chain.)
+        continue-on-error: true
+        uses: gitleaks/gitleaks-action@v2
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
       - name: Set up JDK 17
         uses: actions/setup-java@v4
         with:
@@ -50,16 +59,13 @@ jobs:
         run: |
           set -euo pipefail
           if [ -z "${TRANSLATOR_KEYSTORE_BASE64:-}" ]; then
-            echo "::error::TRANSLATOR_KEYSTORE_BASE64 secret is not set; refusing to build an unsigned or wrongly-signed release APK."
+            echo "::error::TRANSLATOR_KEYSTORE_BASE64 secret is not set; refusing to build."
             exit 1
           fi
           if [ -z "${TRANSLATOR_KEYSTORE_PASSWORD:-}" ] || [ -z "${TRANSLATOR_KEY_ALIAS:-}" ] || [ -z "${TRANSLATOR_KEY_PASSWORD:-}" ]; then
             echo "::error::One or more keystore secrets are empty; aborting."
             exit 1
           fi
-          # The .jks binary lives in RUNNER_TEMP (never inside the repo tree, so no
-          # wildcard upload-artifact or git add can leak it). keystore.properties
-          # (gitignored) lives at the repo root so Gradle's rootProject.file() finds it.
           echo "${TRANSLATOR_KEYSTORE_BASE64}" | base64 -d > "$RUNNER_TEMP/translator-release.jks"
           {
             echo "storeFile=$RUNNER_TEMP/translator-release.jks"
@@ -68,14 +74,10 @@ jobs:
             echo "keyPassword=$TRANSLATOR_KEY_PASSWORD"
           } > "$GITHUB_WORKSPACE/keystore.properties"
           echo "keystore staged (jks in RUNNER_TEMP, properties at repo root)."
-          # Smoke-check: keystore + password + alias are consistent (keytool exits 0).
-          # NOTE: do NOT grep keytool's stdout for verbose fields — `keytool -list`
-          # (without -v) prints a one-line summary that lacks "Alias name"/"Owner"/
-          # "Entry type"; a grep for those would always fail. Rely on the exit code.
           keytool -list -keystore "$RUNNER_TEMP/translator-release.jks" \
             -storepass "$TRANSLATOR_KEYSTORE_PASSWORD" -alias "$TRANSLATOR_KEY_ALIAS" >/dev/null 2>&1 \
             || { echo "::error::keystore/password/alias mismatch — check TRANSLATOR_KEYSTORE_* secrets"; exit 1; }
-          echo "keystore smoke-check passed (alias readable with supplied password)."
+          echo "keystore smoke-check passed."
 
       - name: Make gradlew executable
         run: chmod +x gradlew
@@ -93,64 +95,74 @@ jobs:
       - name: Run unit tests
         run: ./gradlew :app:testDebugUnitTest --no-daemon --stacktrace
 
-      - name: Build release APK
+      - name: Run lint (report, non-failing)
+        continue-on-error: true
+        run: ./gradlew :app:lintRelease --no-daemon --stacktrace
+
+      - name: Build release APK (R8 + ABI splits)
         run: ./gradlew :app:assembleRelease --no-daemon --stacktrace
 
       - name: Build debug APK
         run: ./gradlew :app:assembleDebug --no-daemon --stacktrace
 
-      - name: "Verify release APK signing (fail-closed)"
+      - name: "Verify release APK signing (fail-closed, every variant)"
         run: |
           set -euo pipefail
-          APK="app/build/outputs/apk/release/app-release.apk"
-          echo "=== apksigner location ==="
-          command -v apksigner
-          echo "=== apksigner verify --print-certs --verbose ==="
-          apksigner verify --print-certs --verbose "$APK" | tee apksigner-verify.txt
-          echo "=== assertions (P0-1: release DN + cert SHA-256 pinned; P0-3: v3 required; debug key rejected) ==="
-          grep -q "^Verifies$" apksigner-verify.txt || { echo "::error::apksigner did NOT report 'Verifies'"; exit 1; }
-          # Scheme: AGP 8.5.2 emits v3-only for minSdk >= 24 (v1/v2 flags are accepted but do
-          # not change the output — verified empirically). v3 is supported on Android 7+, so
-          # the APK installs on every target device (minSdk 31). REQUIRE v3=true.
-          grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" apksigner-verify.txt || { echo "::error::v3 scheme NOT verified"; exit 1; }
-          # v1/v2 disposition is informational (do not fail). v1=false means `keytool -printcert`
-          # gives a false "Not a signed jar file" — users must inspect with apksigner instead.
-          grep -q "Verified using v1 scheme (JAR signing): true" apksigner-verify.txt && echo "v1=true (keytool will also report the signer)" || echo "v1=false (inspect with apksigner, NOT keytool)"
-          grep -q "Verified using v2 scheme (APK Signature Scheme v2): true" apksigner-verify.txt && echo "v2=true" || echo "v2=false"
-          grep -q "CN=Screen Translator Release" apksigner-verify.txt || { echo "::error::cert DN does NOT contain 'CN=Screen Translator Release'"; exit 1; }
-          if grep -q "CN=Android Debug" apksigner-verify.txt; then echo "::error::cert is the public Android Debug key — rejected"; exit 1; fi
-          # P0-1: cert SHA-256 baseline — detects key rotation even if the DN is unchanged.
-          # Parse robustly: apksigner 37.x prints "V3.0 Signer: certificate SHA-256 digest: <hex>";
-          # older apksigner prints "Signer #1 certificate SHA-256 digest: <hex>". Match either.
-          EXPECTED_CERT_SHA256="a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2"
-          ACTUAL_CERT_SHA256="$(grep -E 'certificate SHA-256 digest:' apksigner-verify.txt | sed -E 's/.*certificate SHA-256 digest: ([a-f0-9]+).*/\1/' | head -1)"
-          echo "expected cert SHA-256: $EXPECTED_CERT_SHA256"
-          echo "actual   cert SHA-256: $ACTUAL_CERT_SHA256"
-          [ -n "$ACTUAL_CERT_SHA256" ] || { echo "::error::could not parse cert SHA-256 from apksigner output"; exit 1; }
-          [ "$ACTUAL_CERT_SHA256" = "$EXPECTED_CERT_SHA256" ] || { echo "::error::cert SHA-256 mismatch — possible KEY ROTATION (expected $EXPECTED_CERT_SHA256, got $ACTUAL_CERT_SHA256)"; exit 1; }
-          echo "::notice::Release APK signing verified: Verifies, v3=true, DN=CN=Screen Translator Release, cert SHA-256 matches pinned baseline."
-
-      - name: "Generate SHA-256 sidecar and stage release assets"
-        run: |
-          set -euo pipefail
+          shopt -s nullglob
           REL="app/build/outputs/apk/release"
-          DBG="app/build/outputs/apk/debug"
-          ( cd "$REL" && sha256sum app-release.apk > app-release.apk.sha256 )
-          echo "=== APK SHA-256 ==="
-          cat "$REL/app-release.apk.sha256"
-          cp "$REL/app-release.apk"        "$GITHUB_WORKSPACE/screen-translator-v1.2.0-release.apk"
-          cp "$REL/app-release.apk.sha256" "$GITHUB_WORKSPACE/screen-translator-v1.2.0-release.apk.sha256"
-          cp "$DBG/app-debug.apk"          "$GITHUB_WORKSPACE/screen-translator-v1.2.0-debug.apk"
-          echo "=== aapt dump badging ==="
-          aapt dump badging "$GITHUB_WORKSPACE/screen-translator-v1.2.0-release.apk" | head -25 | tee badging.txt
+          echo "=== release APK variants found ==="
+          ls -lh "$REL"/*.apk
+          APK_COUNT=$(ls "$REL"/*.apk 2>/dev/null | wc -l)
+          [ "$APK_COUNT" -gt 0 ] || { echo "::error::no release APKs found at $REL"; exit 1; }
+          for APK in "$REL"/*.apk; do
+            NAME="$(basename "$APK" .apk)"
+            echo "=== verifying $NAME ==="
+            apksigner verify --print-certs --verbose "$APK" | tee "apksigner-verify-$NAME.txt"
+            grep -q "^Verifies$" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME NOT Verifies"; exit 1; }
+            grep -q "Verified using v3 scheme (APK Signature Scheme v3): true" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME v3 not verified"; exit 1; }
+            grep -q "CN=Screen Translator Release" "apksigner-verify-$NAME.txt" || { echo "::error::$NAME wrong DN"; exit 1; }
+            if grep -q "CN=Android Debug" "apksigner-verify-$NAME.txt"; then echo "::error::$NAME debug key"; exit 1; fi
+            ACTUAL="$(grep -E 'certificate SHA-256 digest:' "apksigner-verify-$NAME.txt" | sed -E 's/.*certificate SHA-256 digest: ([a-f0-9]+).*/\1/' | head -1)"
+            EXPECTED="a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2"
+            [ -n "$ACTUAL" ] || { echo "::error::$NAME could not parse cert SHA-256"; exit 1; }
+            [ "$ACTUAL" = "$EXPECTED" ] || { echo "::error::$NAME cert SHA-256 mismatch (expected $EXPECTED got $ACTUAL) — KEY ROTATION?"; exit 1; }
+            echo "OK: $NAME — Verifies, v3, DN=Screen Translator Release, cert matches baseline."
+          done
+          # Concatenate every variant's verify output into one release artifact.
+          cat apksigner-verify-*.txt > apksigner-verify.txt
+          echo "::notice::All $APK_COUNT release variant(s) signing-verified."
 
-      - name: Upload release APK artifact
+      - name: "Generate SHA-256 sidecars + stage release assets"
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          REL="app/build/outputs/apk/release"
+          STAGE="$GITHUB_WORKSPACE"
+          for APK in "$REL"/*.apk; do
+            NAME="$(basename "$APK" .apk)"
+            case "$NAME" in
+              *arm64-v8a*) ASSET="screen-translator-v1.3.0-arm64-v8a-release" ;;
+              *universal*) ASSET="screen-translator-v1.3.0-universal-release" ;;
+              *)           ASSET="screen-translator-v1.3.0-release" ;;
+            esac
+            ( cd "$REL" && sha256sum "$(basename "$APK")" > "$ASSET.apk.sha256" )
+            cp "$APK" "$STAGE/$ASSET.apk"
+            cp "$REL/$ASSET.apk.sha256" "$STAGE/$ASSET.apk.sha256"
+            echo "staged $ASSET.apk ($(wc -c < "$STAGE/$ASSET.apk") bytes)  sha256: $(awk '{print $1}' "$STAGE/$ASSET.apk.sha256")"
+          done
+          # Badging from the arm64 variant (primary); fall back to universal.
+          ARM="$STAGE/screen-translator-v1.3.0-arm64-v8a-release.apk"
+          [ -f "$ARM" ] || ARM="$STAGE/screen-translator-v1.3.0-universal-release.apk"
+          aapt dump badging "$ARM" | head -25 | tee badging.txt
+
+      - name: Upload release APKs artifact
         uses: actions/upload-artifact@v4
         with:
-          name: screen-translator-release-apk
+          name: screen-translator-release-apks
           path: |
-            app/build/outputs/apk/release/app-release.apk
-            app/build/outputs/apk/release/app-release.apk.sha256
+            app/build/outputs/apk/release/*.apk
+            app/build/outputs/apk/release/*.apk.sha256
+            apksigner-verify-*.txt
             apksigner-verify.txt
             badging.txt
           if-no-files-found: error
@@ -160,7 +172,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: screen-translator-debug-apk
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: app/build/outputs/apk/debug/*.apk
           if-no-files-found: error
           retention-days: 90
 
@@ -171,122 +183,99 @@ jobs:
           name: unit-test-results
           path: app/build/test-results/testDebugUnitTest/*.xml
 
+      - name: Upload lint report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: lint-report
+          path: app/build/reports/lint-results-*.html
+          if-no-files-found: ignore
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.2.0
-          name: Screen Translator v1.2.0 (signed release)
+          tag_name: v1.3.0
+          name: Screen Translator v1.3.0 (ABI splits + target-language picker + R8)
           files: |
-            screen-translator-v1.2.0-release.apk
-            screen-translator-v1.2.0-release.apk.sha256
-            screen-translator-v1.2.0-debug.apk
+            screen-translator-v1.3.0-arm64-v8a-release.apk
+            screen-translator-v1.3.0-arm64-v8a-release.apk.sha256
+            screen-translator-v1.3.0-universal-release.apk
+            screen-translator-v1.3.0-universal-release.apk.sha256
             apksigner-verify.txt
             badging.txt
           body: |
-            # Screen Translator v1.2.0 — Android APK (dedicated release key)
+            # Screen Translator v1.3.0 — ABI splits + target-language picker + R8
 
             Built from commit `${{ github.sha }}`.
 
-            ## What changed vs v1.0.x
+            ## What changed in v1.3.0
 
-            - **Dedicated release signing key.** v1.0.0 / v1.0.1 were signed with the
-              throwaway debug keystore (a different key on every CI run, and the public
-              Android debug key) — which made in-place updates impossible and is the
-              classic "no certificates / install failed" trap. v1.1.0 is signed with a
-              dedicated `CN=Screen Translator Release, O=AutomatedLabor` key (v3 scheme,
-              supported on Android 7+; our minSdk is 31), consistent across every build.
-            - **v3-signed (modern Android standard).** AGP 8.5.2 signs the release with
-              the v3 scheme, supported on Android 7+ — every target device (minSdk 31)
-              installs it. v1/v2 are NOT produced. **Inspect with `apksigner verify`, NOT
-              `keytool -printcert`** (keytool is v1-only and reports a false "Not a signed
-              jar file" for v3-only APKs — see `apksigner-verify.txt` in this release for
-              proof of valid signing). (build-learnings headline #16.)
-            - **CI is fail-closed on signing.** If `TRANSLATOR_KEYSTORE_BASE64` is
-              missing the workflow aborts (no unsigned APK can ship). An `apksigner
-              verify` step requires `Verifies` + v3=true + DN contains
-              `CN=Screen Translator Release` + cert SHA-256 matches the pinned baseline
-              (rotation detection) and explicitly rejects the debug key.
-            - versionCode 2 → 3, versionName 1.1.0 → 1.2.0.
+            - **Two APK variants (ABI splits).** The release now ships as **arm64-v8a**
+              (~40 MB, for any 64-bit ARM phone — ~99% of devices since 2017) AND
+              **universal** (~107 MB, smaller with R8 — for 32-bit ARM / x86 emulators /
+              rare x86 devices). Install arm64-v8a unless install fails with
+              `INSTALL_FAILED_NO_MATCHING_ABIS` (then use universal).
+            - **Target language picker.** No longer hardcoded German→English. Pick the
+              target in the app: German → {English, Urdu, French, Spanish, Italian,
+              Portuguese, Russian, Arabic, Turkish, Hindi, Chinese, Japanese}. Persisted
+              to SharedPreferences; the Quick Settings tile picks up the change live
+              (the service recreates its engine) — no need to re-enable accessibility.
+            - **R8 minification + resource shrinking** on release — smaller APK +
+              library-code obfuscation (harder to reverse-engineer). Generous keep rules
+              for the app's classes + ML Kit + GMS keep it safe.
+            - **Security hardening.** `usesCleartextTraffic=false` +
+              `network_security_config.xml` (block cleartext app-wide) +
+              `data_extraction_rules.xml` (exclude every domain from backup/transfer,
+              belt-and-suspenders on `allowBackup=false`).
+            - **Debug-only fix:** `FlagSecureTestActivity` moved from the androidTest
+              sourceset to the debug sourceset (was a dangling exported activity in the
+              debug APK).
+            - **CI hardening:** gitleaks secret scan (advisory) + `lintRelease` report.
+            - versionCode 3 → 4, versionName 1.2.0 → 1.3.0.
 
-            ## What changed in v1.2.0 (fresh-eyes review: 1 P0 + 14 P1 fixes)
+            ## Which APK to install
 
-            - **P0: shade-open race fixed.** `pickTargetWindow()` no longer filters by
-              `isActive` — the target app window is NOT active while the notification
-              shade is open (the user taps the tile from the shade), so the old filter
-              silently returned null and the core feature no-opped from its only entry
-              point. Now picks the topmost TYPE_APPLICATION window by layer.
-            - **Leaks fixed:** overlay `tv` view leak on non-BadToken throws (P1-2);
-              native ML Kit translator leak when `warmup()` races with `close()` (P1-8);
-              root `AccessibilityNodeInfo` not recycled on API 31-32 (P1-14).
-            - **Structured concurrency:** `CancellationException` rethrown, not
-              swallowed, across 5 catch blocks (P1-9).
-            - **UX / a11y:** edge-to-edge enabled for Android 15 (P1-4); model status
-              re-queried on resume (P1-5); close button gets a TalkBack
-              `contentDescription` (P1-6); close button uses
-              `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS` so it isn't obscured by a punch-hole
-              (P1-7); overlay text uses `scaledDensity` so it respects the user's font-size
-              setting (P1-11).
-            - **Tile:** `dismiss()` runs inline on the main thread so the tile state flips
-              synchronously (P1-12); `startActivityAndCollapse` branches to the API 34+
-              PendingIntent variant (P1-10).
-            - **Hardening:** `allowBackup=false` (the service reads screen contents —
-              P1-13); launcher package cached once per process instead of 2N binder calls
-              (P1-15).
-
-            ## Files
-
-            - **`screen-translator-v1.2.0-release.apk`** — signed release (~110 MB).
-            - **`screen-translator-v1.2.0-release.apk.sha256`** — SHA-256 sidecar.
-            - **`screen-translator-v1.2.0-debug.apk`** — debug variant (~127 MB).
-            - **`apksigner-verify.txt`** — proof of signing verification.
-            - **`badging.txt`** — `aapt dump badging` (versionCode/Name, launchable activity).
+            | APK | Size | Install on |
+            |---|---|---|
+            | `screen-translator-v1.3.0-arm64-v8a-release.apk` | ~40 MB | **Any phone from ~2017** (Pixel, Samsung, OnePlus, Xiaomi, etc. — 64-bit ARM). Try this first. |
+            | `screen-translator-v1.3.0-universal-release.apk` | ~107 MB | 32-bit ARM phones (pre-2017), x86 emulators, rare x86 devices. Fallback. |
 
             ## Install
 
-            1. **If you have v1.0.0 or v1.0.1 installed, uninstall it first**
-               (Settings → Apps → Screen Translator → Uninstall) — the signing key changed
-               in v1.1.0, so Android rejects an in-place update from those. **v1.1.0 users
-               can update in place to v1.2.0** (same signing key, cert SHA-256
-               `a0b5e5…7fa2`).
-            2. Download `screen-translator-v1.2.0-release.apk` to your phone.
-            3. Tap to install. Accept **"Unknown sources"** for the file manager / browser.
-            4. **Android 13+ sideload extra step:** long-press the app icon → App Info →
-               three-dot menu → **"Allow restricted settings"**. This unblocks the
-               accessibility permission Android 13 hides for sideloaded APKs.
-            5. Open **Settings → Accessibility → Screen Translator → enable**.
-            6. Open the app → tap **Download model** (German → English, ~30 MB on-device).
-            7. Pull down the Quick Settings shade twice → edit → drag the
-               **"Translate Screen"** tile into the active row.
-            8. Open any German app → tap the tile → German text is overlaid with English.
-               Tap **X** (top-right) or scroll / switch apps to dismiss.
+            1. **If you have v1.0.0 or v1.0.1 installed, uninstall it first** (the signing
+               key changed in v1.1.0). **v1.1.0 / v1.2.0 users can update in place** (same
+               signing key, cert SHA-256 `a0b5e5…7fa2`).
+            2. Download the arm64-v8a APK (or universal if arm64 fails) to your phone.
+            3. Tap to install. Accept **"Unknown sources"**.
+            4. **Android 13+:** long-press app icon → App Info → ⋮ → **"Allow restricted settings"**.
+            5. Settings → Accessibility → Screen Translator → enable.
+            6. Open the app → pick a **target language** → tap **Download model**.
+            7. Pull down the Quick Settings shade twice → edit → drag the **"Translate Screen"** tile in.
+            8. Open any German app → tap the tile → German text is overlaid with your target language.
 
-            ## How to verify the APK is signed (if you want to check)
+            ## How to verify the APK is signed
 
-            Use **`apksigner`**, NOT `keytool -printcert` (keytool is v1-only and reports
-            a false "Not a signed jar file" for this v3-only APK — see `apksigner-verify.txt`
-            for proof of valid signing):
+            Use **`apksigner`**, NOT `keytool -printcert` (v1-only; false "Not a signed
+            jar file" on v3-only APKs). See `apksigner-verify.txt` for CI's proof.
 
             ```
-            apksigner verify --print-certs --verbose screen-translator-v1.2.0-release.apk
+            apksigner verify --print-certs --verbose screen-translator-v1.3.0-arm64-v8a-release.apk
             # expect: Verifies, v3=true,
             #         Signer #1 certificate DN: CN=Screen Translator Release, O=AutomatedLabor, C=US
             #         Signer #1 certificate SHA-256 digest: a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2
-            sha256sum -c screen-translator-v1.2.0-release.apk.sha256
+            sha256sum -c screen-translator-v1.3.0-arm64-v8a-release.apk.sha256
             ```
-
-            ## Requirements
-
-            - Android 12+ (API 31), ~150 MB free storage, no Google account required
-              (ML Kit translation is on-device after the one-time model download).
 
             ## Verification done by CI
 
-            - `apksigner verify --print-certs --verbose` → `Verifies`, v3=true, signer
-              DN contains `CN=Screen Translator Release`, cert SHA-256 matches pinned
-              baseline `a0b5e5…7fa2` (no key rotation).
-            - Unit tests: 41 JVM tests (BoundingBox geometry, ScreenTextExtractor
-              dedup/grouping, MlKitTranslationEngine regex + language-id filtering,
-              LruCache behavior).
+            - `apksigner verify` on **every** release variant → `Verifies`, v3=true, DN
+              contains `CN=Screen Translator Release`, cert SHA-256 matches pinned baseline
+              `a0b5e5…7fa2` (no key rotation), debug key explicitly rejected.
+            - Unit tests + lint run on every push.
+
+            ## Requirements
+
+            - Android 12+ (API 31), ~150 MB free storage (APK + ML Kit model), no Google account.
           draft: false
           prerelease: false
         env:

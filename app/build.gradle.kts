@@ -24,8 +24,8 @@ android {
         applicationId = "com.translator.screen"
         minSdk = 31
         targetSdk = 35
-        versionCode = 3
-        versionName = "1.2.0"
+        versionCode = 4
+        versionName = "1.3.0"
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
     }
@@ -61,8 +61,18 @@ android {
 
     buildTypes {
         release {
-            isMinifyEnabled = false
-            isShrinkResources = false
+            // R8 minification + resource shrinking: removes unused library code (Compose/
+            // AndroidX have many classes this app never touches) + shrinks resources, so
+            // the release APK is smaller AND library code is obfuscated (harder to reverse).
+            // Generous keep rules in proguard-rules.pro (app classes + ML Kit + GMS) make
+            // this safe — AGP auto-keeps manifest-referenced classes + applies Compose/
+            // AndroidX consumer rules. (build-learnings: family-locator R8 lesson.)
+            isMinifyEnabled = true
+            isShrinkResources = true
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
             // Use the dedicated release key when a storeFile is declared (CI);
             // fall back to debug ONLY for local dev. CI's `apksigner verify` step is the
             // fail-closed gate that rejects any APK not signed with the release key.
@@ -74,6 +84,18 @@ android {
         }
         debug {
             signingConfig = signingConfigs.getByName("debug")
+        }
+    }
+
+    // ABI splits: produce an arm64-v8a-only APK (~40 MB) for the ~99% of phones that are
+    // 64-bit ARM, plus a universal APK (~107 MB, smaller with R8) for 32-bit ARM / x86
+    // emulators / rare x86 devices. Both are signed + verified + released. See ROADMAP.md.
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a")
+            isUniversalApk = true
         }
     }
 

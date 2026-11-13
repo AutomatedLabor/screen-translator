@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<network-security-config>
+    <!--
+      Block cleartext (HTTP) traffic app-wide. The app is offline after the one-time ML Kit
+      model download (which uses ML Kit's own HTTPS stack, unaffected by this app-level
+      config). This prevents any future accidental cleartext HTTP from the app itself and
+      satisfies Android 9+ (API 28+) cleartext restrictions by default.
+    -->
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

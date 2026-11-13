@@ -13,11 +13,14 @@
     <string name="card_accessibility_help_header">How to enable (Android 13+)</string>
     <string name="card_accessibility_help_body">Because this is a sideloaded APK, Android 13+ blocks enabling the service from the regular Accessibility screen. To allow it: 1) Long-press the app icon → App Info → three-dot menu → \"Allow restricted settings\". 2) Then go back to Settings → Accessibility → Screen Translator → enable.</string>
 
-    <string name="card_model_title">Offline Model (German → English)</string>
+    <string name="card_model_title">Offline Translation Model</string>
     <string name="card_model_status_downloaded">Model downloaded — ready</string>
     <string name="card_model_status_not_downloaded">Model not downloaded</string>
     <string name="card_model_download">Download model</string>
     <string name="card_model_test">Test translation</string>
+
+    <string name="card_target_title">Target Language</string>
+    <string name="card_target_body">German on-screen text is translated into this language. The change takes effect immediately for both the test below and the Quick Settings tile (no need to re-enable accessibility).</string>
 
     <string name="card_tile_title">Quick Settings Tile</string>
     <string name="card_tile_body">Pull down the shade twice → edit → drag the \"Translate Screen\" tile into the active row. Then open any German app and tap the tile to translate the screen.</string>
@@ -26,5 +29,5 @@
     <string name="close_overlay">Close overlay</string>
     <string name="model_download_in_progress">Downloading model…</string>
     <string name="model_download_failed">Download failed</string>
-    <string name="translation_test_placeholder">English translation will appear here.</string>
+    <string name="translation_test_placeholder">Translation will appear here.</string>
 </resources>

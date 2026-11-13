@@ -36,6 +36,8 @@ import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TopAppBar
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
@@ -60,6 +62,8 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import kotlinx.coroutines.CancellationException
 import com.translator.screen.R
 import com.translator.screen.service.TranslatorAccessibilityService
+import com.translator.screen.util.LanguagePrefs
+import com.translator.screen.util.TargetLanguages
 import com.translator.screen.translate.ITranslationEngine
 import com.translator.screen.translate.MlKitTranslationEngine
 import kotlinx.coroutines.launch
@@ -122,7 +126,8 @@ private fun ScreenTranslatorSetupScreen() {
     val lifecycleOwner = LocalLifecycleOwner.current
     val scope = rememberCoroutineScope()
 
-    val engine: ITranslationEngine = remember { MlKitTranslationEngine() }
+    var targetTag by remember { mutableStateOf(LanguagePrefs.getTargetTag(context)) }
+    var engine by remember { mutableStateOf<ITranslationEngine>(MlKitTranslationEngine(targetTag)) }
     DisposableEffect(Unit) { onDispose { engine.close() } }
 
     var serviceEnabled by remember { mutableStateOf(isAccessibilityServiceEnabled(context)) }
@@ -134,6 +139,24 @@ private fun ScreenTranslatorSetupScreen() {
     var testOutput by remember { mutableStateOf("") }
     var isTranslating by remember { mutableStateOf(false) }
     var showRestrictedHelp by remember { mutableStateOf(false) }
+    var showTargetDialog by remember { mutableStateOf(false) }
+
+    /**
+     * Live-switch the target language: persist to SharedPreferences, recreate the UI's
+     * test engine, reset the model-status + test output, and tell the accessibility
+     * service (if connected) to recreate its engine too — so the Quick Settings tile
+     * picks up the new target without re-enabling accessibility.
+     */
+    fun onTargetChange(newTag: String) {
+        if (newTag == targetTag) return
+        LanguagePrefs.setTargetTag(context, newTag)
+        engine.close()
+        engine = MlKitTranslationEngine(newTag)
+        targetTag = newTag
+        modelDownloaded = false
+        testOutput = ""
+        TranslatorAccessibilityService.instance?.updateTargetLanguage(newTag)
+    }
 
     DisposableEffect(lifecycleOwner) {
         val observer = LifecycleEventObserver { _, event ->
@@ -227,6 +250,51 @@ private fun ScreenTranslatorSetupScreen() {
                                     modifier = Modifier.padding(12.dp)
                                 )
                             }
+                        }
+                    }
+                }
+            }
+
+            item {
+                Card(modifier = Modifier.fillMaxWidth()) {
+                    Column(modifier = Modifier.padding(16.dp)) {
+                        Text(
+                            text = stringResource(R.string.card_target_title),
+                            style = MaterialTheme.typography.titleLarge
+                        )
+                        Text(
+                            text = stringResource(R.string.card_target_body),
+                            style = MaterialTheme.typography.bodyMedium,
+                            modifier = Modifier.padding(top = 8.dp)
+                        )
+                        OutlinedButton(
+                            onClick = { showTargetDialog = true },
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(top = 12.dp)
+                        ) {
+                            Text("German  →  " + TargetLanguages.displayFor(targetTag))
+                        }
+                        if (showTargetDialog) {
+                            AlertDialog(
+                                onDismissRequest = { showTargetDialog = false },
+                                title = { Text(stringResource(R.string.card_target_title)) },
+                                text = {
+                                    Column {
+                                        TargetLanguages.ALL.forEach { entry ->
+                                            TextButton(
+                                                onClick = {
+                                                    onTargetChange(entry.tag)
+                                                    showTargetDialog = false
+                                                }
+                                            ) {
+                                                Text(entry.display)
+                                            }
+                                        }
+                                    }
+                                },
+                                confirmButton = {}
+                            )
                         }
                     }
                 }

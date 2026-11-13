@@ -1,0 +1,23 @@
+<?xml version="1.0" encoding="utf-8"?>
+<data-extraction-rules>
+    <!--
+      Belt-and-suspenders on android:allowBackup="false" (Android 12+ / API 31+).
+      Exclude every domain from both cloud backup and device-to-device transfer, so no
+      on-screen text the accessibility service observed can ever be backed up or copied
+      off the device via Android's backup/transfer mechanisms.
+    -->
+    <cloud-backup>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </cloud-backup>
+    <device-transfer>
+        <exclude domain="root" />
+        <exclude domain="file" />
+        <exclude domain="database" />
+        <exclude domain="sharedpref" />
+        <exclude domain="external" />
+    </device-transfer>
+</data-extraction-rules>

@@ -1,11 +1,14 @@
 package com.translator.screen.translate
 
-/** Contract for the German→English translator. All methods are main-safe. */
+/** Contract for the German→target translator. All methods are main-safe. */
 interface ITranslationEngine {
-  /** Translate a single source string to English. Returns source unchanged if filtered out. */
+  /** The BCP-47 target language tag this engine translates German into (e.g. "en", "ur"). */
+  val targetLanguageTag: String
+
+  /** Translate a single source string into [targetLanguageTag]. Returns source unchanged if filtered out. */
   suspend fun translate(source: String): String
 
-  /** True if the German→English offline model is downloaded and ready. */
+  /** True if the German→[targetLanguageTag] offline model pair is downloaded and ready. */
   suspend fun isModelDownloaded(): Boolean
 
   /** Trigger ML Kit model download (idempotent). Suspends until download completes or fails. */
