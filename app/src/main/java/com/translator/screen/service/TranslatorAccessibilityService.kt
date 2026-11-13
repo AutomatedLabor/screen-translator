@@ -18,6 +18,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import android.os.Build
+import kotlinx.coroutines.CancellationException
 
 /**
  * Accessibility service that drives the screen-translation pipeline.
@@ -144,6 +146,12 @@ class TranslatorAccessibilityService : AccessibilityService() {
                 return@launch
             }
             val regions = withContext(Dispatchers.Default) { extractor.extract(root) }
+            // Recycle the root node on API 31-32 (the extractor recycles children it obtains
+            // via getChild, but not the root it's handed). API 33+ pools nodes and recycle()
+            // is a no-op. (Fresh-eyes review P1-14.)
+            if (Build.VERSION.SDK_INT < 33) {
+                try { root.recycle() } catch (_: Throwable) { }
+            }
             if (regions.isEmpty()) {
                 Log.i(TAG, "No text regions found")
                 return@launch
@@ -172,6 +180,7 @@ class TranslatorAccessibilityService : AccessibilityService() {
                         }
                     }
                 } catch (e: Exception) {
+                    if (e is CancellationException) throw e
                     Log.w(TAG, "Translation failed for region: ${e.message}")
                     null
                 }
@@ -205,21 +214,35 @@ class TranslatorAccessibilityService : AccessibilityService() {
     // -------------------------------------------------------------------------
 
     /**
-     * Pick the topmost active application window to translate. Excludes our
-     * own package and — when more than one candidate remains — drops launcher
-     * windows so we don't translate the home screen behind a dialog.
+     * Pick the topmost application window to translate. Excludes our own package
+     * and launcher windows (when another app window exists) so we don't translate
+     * the home screen behind a dialog.
+     *
+     * NOTE: deliberately does NOT filter by [AccessibilityWindowInfo.isActive] —
+     * the user taps the Quick Settings tile from the notification shade, so the
+     * target app window is NOT active at snapshot time (the shade is). Filtering
+     * by isActive silently returned null and the core feature no-opped from its
+     * only entry point. The app window is still in [windows] while the shade is
+     * open; pick it by layer instead. (Fresh-eyes review P0-1.)
      */
     private fun pickTargetWindow(): AccessibilityWindowInfo? {
         val all = windows ?: return null
         val ownPkg = packageName?.toString().orEmpty()
+        // Cache the launcher package once per process — PackageUtils.resolveLauncherPackage
+        // does a synchronous PackageManager.resolveActivity binder call; calling it 2N times
+        // per pick was wasteful. (Fresh-eyes review P1-15.)
+        val launcherPkg = cachedLauncherPackage
+        fun isLauncher(w: AccessibilityWindowInfo): Boolean {
+            val pkg = w.root?.packageName?.toString().orEmpty()
+            return pkg.isNotEmpty() && pkg == launcherPkg
+        }
         val candidates = all.filter { w ->
             w.type == AccessibilityWindowInfo.TYPE_APPLICATION &&
-                w.isActive &&
                 w.root?.packageName?.toString() != ownPkg
         }
         if (candidates.isEmpty()) return null
-        val pool = if (candidates.size > 1 && candidates.any { isLauncherWindow(it) }) {
-            val nonLauncher = candidates.filterNot { isLauncherWindow(it) }
+        val pool = if (candidates.size > 1 && candidates.any { isLauncher(it) }) {
+            val nonLauncher = candidates.filterNot { isLauncher(it) }
             if (nonLauncher.isNotEmpty()) nonLauncher else candidates
         } else {
             candidates
@@ -227,10 +250,9 @@ class TranslatorAccessibilityService : AccessibilityService() {
         return pool.sortedByDescending { it.layer }.firstOrNull()
     }
 
-    private fun isLauncherWindow(w: AccessibilityWindowInfo): Boolean {
-        val pkg = w.root?.packageName?.toString().orEmpty()
-        if (pkg.isEmpty()) return false
-        return PackageUtils.isLauncherPackage(applicationContext, pkg)
+    /** Cached default-launcher package name; resolved lazily once per process. */
+    private val cachedLauncherPackage: String? by lazy {
+        PackageUtils.resolveLauncherPackage(applicationContext)
     }
 
     /**

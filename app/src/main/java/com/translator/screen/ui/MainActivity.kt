@@ -9,6 +9,7 @@ import android.provider.Settings.Secure
 import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.enableEdgeToEdge
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Arrangement
@@ -56,6 +57,7 @@ import androidx.core.content.ContextCompat
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.compose.LocalLifecycleOwner
+import kotlinx.coroutines.CancellationException
 import com.translator.screen.R
 import com.translator.screen.service.TranslatorAccessibilityService
 import com.translator.screen.translate.ITranslationEngine
@@ -65,6 +67,10 @@ import kotlinx.coroutines.launch
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Edge-to-edge is enforced on Android 15 (targetSdk 35); opt in explicitly so
+        // the Scaffold's content padding accounts for the status-bar inset and the
+        // TopAppBar doesn't slide under the status bar. (Fresh-eyes review P1-4.)
+        enableEdgeToEdge()
         setContent {
             ScreenTranslatorTheme {
                 ScreenTranslatorSetupScreen()
@@ -133,6 +139,17 @@ private fun ScreenTranslatorSetupScreen() {
         val observer = LifecycleEventObserver { _, event ->
             if (event == Lifecycle.Event.ON_RESUME) {
                 serviceEnabled = isAccessibilityServiceEnabled(context)
+                // Re-query model status so users who already downloaded the model see
+                // "downloaded" on return, not the initial false. (Fresh-eyes review P1-5.)
+                scope.launch {
+                    val ready = try {
+                        engine.isModelDownloaded()
+                    } catch (e: Exception) {
+                        if (e is CancellationException) throw e
+                        false
+                    }
+                    modelDownloaded = ready
+                }
             }
         }
         lifecycleOwner.lifecycle.addObserver(observer)
@@ -254,6 +271,7 @@ private fun ScreenTranslatorSetupScreen() {
                                         downloadProgress = 1f
                                         modelDownloaded = true
                                     } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
                                         Toast.makeText(
                                             context,
                                             context.getString(R.string.model_download_failed),
@@ -284,6 +302,7 @@ private fun ScreenTranslatorSetupScreen() {
                                     testOutput = try {
                                         engine.translate(testInput)
                                     } catch (e: Exception) {
+                                        if (e is CancellationException) throw e
                                         "Error: ${e.message}"
                                     }
                                     isTranslating = false

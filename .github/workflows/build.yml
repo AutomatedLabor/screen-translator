@@ -138,11 +138,11 @@ jobs:
           ( cd "$REL" && sha256sum app-release.apk > app-release.apk.sha256 )
           echo "=== APK SHA-256 ==="
           cat "$REL/app-release.apk.sha256"
-          cp "$REL/app-release.apk"        "$GITHUB_WORKSPACE/screen-translator-v1.1.0-release.apk"
-          cp "$REL/app-release.apk.sha256" "$GITHUB_WORKSPACE/screen-translator-v1.1.0-release.apk.sha256"
-          cp "$DBG/app-debug.apk"          "$GITHUB_WORKSPACE/screen-translator-v1.1.0-debug.apk"
+          cp "$REL/app-release.apk"        "$GITHUB_WORKSPACE/screen-translator-v1.2.0-release.apk"
+          cp "$REL/app-release.apk.sha256" "$GITHUB_WORKSPACE/screen-translator-v1.2.0-release.apk.sha256"
+          cp "$DBG/app-debug.apk"          "$GITHUB_WORKSPACE/screen-translator-v1.2.0-debug.apk"
           echo "=== aapt dump badging ==="
-          aapt dump badging "$GITHUB_WORKSPACE/screen-translator-v1.1.0-release.apk" | head -25 | tee badging.txt
+          aapt dump badging "$GITHUB_WORKSPACE/screen-translator-v1.2.0-release.apk" | head -25 | tee badging.txt
 
       - name: Upload release APK artifact
         uses: actions/upload-artifact@v4
@@ -174,16 +174,16 @@ jobs:
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          tag_name: v1.1.0
-          name: Screen Translator v1.1.0 (signed release)
+          tag_name: v1.2.0
+          name: Screen Translator v1.2.0 (signed release)
           files: |
-            screen-translator-v1.1.0-release.apk
-            screen-translator-v1.1.0-release.apk.sha256
-            screen-translator-v1.1.0-debug.apk
+            screen-translator-v1.2.0-release.apk
+            screen-translator-v1.2.0-release.apk.sha256
+            screen-translator-v1.2.0-debug.apk
             apksigner-verify.txt
             badging.txt
           body: |
-            # Screen Translator v1.1.0 — Android APK (dedicated release key)
+            # Screen Translator v1.2.0 — Android APK (dedicated release key)
 
             Built from commit `${{ github.sha }}`.
 
@@ -206,22 +206,49 @@ jobs:
               verify` step requires `Verifies` + v3=true + DN contains
               `CN=Screen Translator Release` + cert SHA-256 matches the pinned baseline
               (rotation detection) and explicitly rejects the debug key.
-            - versionCode 1 → 2, versionName 1.0.0 → 1.1.0.
+            - versionCode 2 → 3, versionName 1.1.0 → 1.2.0.
+
+            ## What changed in v1.2.0 (fresh-eyes review: 1 P0 + 14 P1 fixes)
+
+            - **P0: shade-open race fixed.** `pickTargetWindow()` no longer filters by
+              `isActive` — the target app window is NOT active while the notification
+              shade is open (the user taps the tile from the shade), so the old filter
+              silently returned null and the core feature no-opped from its only entry
+              point. Now picks the topmost TYPE_APPLICATION window by layer.
+            - **Leaks fixed:** overlay `tv` view leak on non-BadToken throws (P1-2);
+              native ML Kit translator leak when `warmup()` races with `close()` (P1-8);
+              root `AccessibilityNodeInfo` not recycled on API 31-32 (P1-14).
+            - **Structured concurrency:** `CancellationException` rethrown, not
+              swallowed, across 5 catch blocks (P1-9).
+            - **UX / a11y:** edge-to-edge enabled for Android 15 (P1-4); model status
+              re-queried on resume (P1-5); close button gets a TalkBack
+              `contentDescription` (P1-6); close button uses
+              `LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS` so it isn't obscured by a punch-hole
+              (P1-7); overlay text uses `scaledDensity` so it respects the user's font-size
+              setting (P1-11).
+            - **Tile:** `dismiss()` runs inline on the main thread so the tile state flips
+              synchronously (P1-12); `startActivityAndCollapse` branches to the API 34+
+              PendingIntent variant (P1-10).
+            - **Hardening:** `allowBackup=false` (the service reads screen contents —
+              P1-13); launcher package cached once per process instead of 2N binder calls
+              (P1-15).
 
             ## Files
 
-            - **`screen-translator-v1.1.0-release.apk`** — signed release (~110 MB).
-            - **`screen-translator-v1.1.0-release.apk.sha256`** — SHA-256 sidecar.
-            - **`screen-translator-v1.1.0-debug.apk`** — debug variant (~127 MB).
+            - **`screen-translator-v1.2.0-release.apk`** — signed release (~110 MB).
+            - **`screen-translator-v1.2.0-release.apk.sha256`** — SHA-256 sidecar.
+            - **`screen-translator-v1.2.0-debug.apk`** — debug variant (~127 MB).
             - **`apksigner-verify.txt`** — proof of signing verification.
             - **`badging.txt`** — `aapt dump badging` (versionCode/Name, launchable activity).
 
             ## Install
 
             1. **If you have v1.0.0 or v1.0.1 installed, uninstall it first**
-               (Settings → Apps → Screen Translator → Uninstall). The signing key
-               changed, so Android intentionally rejects an in-place update.
-            2. Download `screen-translator-v1.1.0-release.apk` to your phone.
+               (Settings → Apps → Screen Translator → Uninstall) — the signing key changed
+               in v1.1.0, so Android rejects an in-place update from those. **v1.1.0 users
+               can update in place to v1.2.0** (same signing key, cert SHA-256
+               `a0b5e5…7fa2`).
+            2. Download `screen-translator-v1.2.0-release.apk` to your phone.
             3. Tap to install. Accept **"Unknown sources"** for the file manager / browser.
             4. **Android 13+ sideload extra step:** long-press the app icon → App Info →
                three-dot menu → **"Allow restricted settings"**. This unblocks the
@@ -240,11 +267,11 @@ jobs:
             for proof of valid signing):
 
             ```
-            apksigner verify --print-certs --verbose screen-translator-v1.1.0-release.apk
+            apksigner verify --print-certs --verbose screen-translator-v1.2.0-release.apk
             # expect: Verifies, v3=true,
             #         Signer #1 certificate DN: CN=Screen Translator Release, O=AutomatedLabor, C=US
             #         Signer #1 certificate SHA-256 digest: a0b5e5f35ee134d2816a24cc467297b3024ea466f1d5d98c0104b3e8b7e27fa2
-            sha256sum -c screen-translator-v1.1.0-release.apk.sha256
+            sha256sum -c screen-translator-v1.2.0-release.apk.sha256
             ```
 
             ## Requirements

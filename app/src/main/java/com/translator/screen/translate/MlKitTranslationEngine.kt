@@ -17,6 +17,7 @@ import kotlinx.coroutines.GlobalScope
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.tasks.await
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.CancellationException
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -51,8 +52,13 @@ class MlKitTranslationEngine : ITranslationEngine {
     // Fire-and-forget trivial translation to spin up the native model.
     @OptIn(DelicateCoroutinesApi::class)
     GlobalScope.launch(Dispatchers.Default) {
+      // Re-check closed inside the coroutine: close() may have run between warmup() being
+      // scheduled and this block executing. Without this, getOrCreateTranslator() would
+      // (re)create a Translator after close() nulled it, leaking the native model.
+      // (Fresh-eyes review P1-8.)
+      if (closed.get()) return@launch
       runCatching {
-        getOrCreateTranslator().translate("hallo").await()
+        getOrCreateTranslator()?.translate("hallo")?.await()
       }.onFailure { e ->
         Log.d(TAG, "Warmup failed: ${e.message}")
       }
@@ -109,6 +115,7 @@ class MlKitTranslationEngine : ITranslationEngine {
         conf = best?.confidence ?: 0f
         Log.d(TAG, "Language-id result: lang=$lang conf=$conf for '$trimmed'")
       } catch (e: Exception) {
+        if (e is CancellationException) throw e
         Log.d(TAG, "Language-id failure: ${e.message}; defaulting to translate=true")
         return@withContext true
       }
@@ -150,11 +157,13 @@ class MlKitTranslationEngine : ITranslationEngine {
       while (attempt < 2) {
         attempt++
         try {
-          val result = getOrCreateTranslator().translate(source).await()
+          val t = getOrCreateTranslator() ?: return@withContext source
+          val result = t.translate(source).await()
           synchronized(cache) { cache.put(key, result) }
           Log.d(TAG, "Translated: '$source' -> '$result'")
           return@withContext result
         } catch (e: Exception) {
+          if (e is CancellationException) throw e
           Log.d(TAG, "Translate failure: ${e.message}")
           if (!retriedAfterDownload && isModelMissingError(e)) {
             retriedAfterDownload = true
@@ -162,6 +171,7 @@ class MlKitTranslationEngine : ITranslationEngine {
             try {
               downloadModelIfNeeded()
             } catch (dlEx: Exception) {
+              if (dlEx is CancellationException) throw dlEx
               Log.d(TAG, "Retry download failed: ${dlEx.message}")
               return@withContext source
             }
@@ -199,11 +209,11 @@ class MlKitTranslationEngine : ITranslationEngine {
       }
       Log.d(TAG, "Model download start")
       try {
-        getOrCreateTranslator()
-          .downloadModelIfNeeded(DownloadConditions.Builder().build())
-          .await()
+        val t = getOrCreateTranslator() ?: return@withContext
+        t.downloadModelIfNeeded(DownloadConditions.Builder().build()).await()
         Log.d(TAG, "Model download complete")
       } catch (e: Exception) {
+        if (e is CancellationException) throw e
         Log.d(TAG, "Model download failed: ${e.message}")
         throw e
       }
@@ -227,9 +237,14 @@ class MlKitTranslationEngine : ITranslationEngine {
   // Internals
   // -------------------------------------------------------------------------
 
-  private fun getOrCreateTranslator(): Translator {
+  private fun getOrCreateTranslator(): Translator? {
+    // P1-8: never (re)create after close(). Previously, a warmup() GlobalScope launch
+    // racing with close() would enter here, find translator==null (close() nulled it),
+    // and create a fresh Translator that nobody ever closed — a native ML Kit leak.
+    if (closed.get()) return null
     translator?.let { return it }
     synchronized(initLock) {
+      if (closed.get()) return null
       translator?.let { return it }
       val options = TranslatorOptions.Builder()
         .setSourceLanguage(TranslateLanguage.GERMAN)

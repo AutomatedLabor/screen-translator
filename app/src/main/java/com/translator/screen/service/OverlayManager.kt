@@ -17,6 +17,7 @@ import android.view.MotionEvent
 import android.view.View
 import android.view.WindowManager
 import android.view.WindowManager.LayoutParams
+import com.translator.screen.R
 import com.translator.screen.extract.TranslatedTextRegion
 
 /**
@@ -43,8 +44,11 @@ class OverlayManager(
     private val mainHandler = Handler(Looper.getMainLooper())
 
     private val density = context.resources.displayMetrics.density
+    private val scaledDensity = context.resources.displayMetrics.scaledDensity
     private val Int.dp: Int get() = (this * density + 0.5f).toInt()
-    private val Int.sp: Float get() = this * density
+    // Use scaledDensity (not density) so overlay text respects the user's font-size
+    // accessibility setting. (Fresh-eyes review P1-11.)
+    private val Int.sp: Float get() = this * scaledDensity
     private val screenWidth: Int get() = context.resources.displayMetrics.widthPixels
     private val screenHeight: Int get() = context.resources.displayMetrics.heightPixels
 
@@ -63,42 +67,54 @@ class OverlayManager(
         Log.d(tag, "show regions=${regions.size}")
         mainHandler.post {
             if (isShowing) dismissInternal()
+            val tv = TranslationCardView(context, regions, darkTheme)
+            val cv = CloseButtonView(context)
+            val tp = buildTranslationParams()
+            val cp = buildCloseParams()
             try {
-                val tv = TranslationCardView(context, regions, darkTheme)
-                val cv = CloseButtonView(context)
-                val tp = buildTranslationParams()
-                val cp = buildCloseParams()
-                try {
-                    windowManager.addView(tv, tp)
-                } catch (e: WindowManager.BadTokenException) {
-                    Log.e(tag, "BadTokenException adding translation overlay", e)
-                    return@post
-                }
-                try {
-                    windowManager.addView(cv, cp)
-                } catch (e: WindowManager.BadTokenException) {
-                    Log.e(tag, "BadTokenException adding close button overlay", e)
-                    try {
-                        windowManager.removeView(tv)
-                    } catch (_: IllegalArgumentException) {
-                        // Already detached; safe to ignore.
-                    }
-                    return@post
-                }
-                translationView = tv
-                closeView = cv
-                translationParams = tp
-                closeParams = cp
+                windowManager.addView(tv, tp)
+            } catch (e: WindowManager.BadTokenException) {
+                Log.e(tag, "BadTokenException adding translation overlay", e)
+                return@post
             } catch (t: Throwable) {
-                Log.e(tag, "Unexpected failure in show()", t)
+                Log.e(tag, "Unexpected failure adding translation overlay", t)
+                return@post
             }
+            // Track tv IMMEDIATELY after addView succeeds, so any failure between the two
+            // addView calls (or any later throw) doesn't leak tv in the WindowManager
+            // untracked — the old code only assigned translationView after both addViews,
+            // so a non-BadToken throw from addView(cv) left tv stuck on screen until
+            // process death. dismissInternal() now removes it. (Fresh-eyes review P1-2.)
+            translationView = tv
+            translationParams = tp
+            try {
+                windowManager.addView(cv, cp)
+            } catch (e: WindowManager.BadTokenException) {
+                Log.e(tag, "BadTokenException adding close button overlay", e)
+                dismissInternal()
+                return@post
+            } catch (t: Throwable) {
+                Log.e(tag, "Unexpected failure adding close button overlay", t)
+                dismissInternal()
+                return@post
+            }
+            closeView = cv
+            closeParams = cp
         }
     }
 
     /** Remove both windows from the WindowManager. No-op if not shown. */
     fun dismiss() {
         Log.d(tag, "dismiss")
-        mainHandler.post { dismissInternal() }
+        // Run inline when already on the main thread (e.g. from QuickTileService.onClick,
+        // which calls dismissOverlayPublic -> dismiss) so isShowing flips synchronously
+        // before refreshTileState queries it. Otherwise post to the main looper.
+        // (Fresh-eyes review P1-12: previously always async, the tile showed stale STATE_ACTIVE.)
+        if (Looper.myLooper() == Looper.getMainLooper()) {
+            dismissInternal()
+        } else {
+            mainHandler.post { dismissInternal() }
+        }
     }
 
     /** True iff at least the primary translation window is attached. */
@@ -156,6 +172,10 @@ class OverlayManager(
             gravity = Gravity.TOP or Gravity.END
             x = 0
             y = 0
+            // Match the translation layer's cutout mode so the button isn't inset away
+            // from the translation card's top-end on punch-hole devices. (P1-7.)
+            layoutInDisplayCutoutMode = LayoutParams.LAYOUT_IN_DISPLAY_CUTOUT_MODE_ALWAYS
+            setTitle("ScreenTranslatorCloseButton")
         }
     }
 
@@ -264,6 +284,11 @@ class OverlayManager(
      * (FLAG_NOT_FOCUSABLE only — touch events reach this view).
      */
     private inner class CloseButtonView(context: Context) : View(context) {
+
+        init {
+            // TalkBack label — R.string.close_overlay was defined but unused. (P1-6.)
+            contentDescription = context.getString(R.string.close_overlay)
+        }
 
         private val bgPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
             style = Paint.Style.FILL

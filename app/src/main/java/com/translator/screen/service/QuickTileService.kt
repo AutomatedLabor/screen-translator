@@ -1,6 +1,7 @@
 package com.translator.screen.service
 
 import android.content.Intent
+import android.os.Build
 import android.service.quicksettings.Tile
 import android.service.quicksettings.TileService
 import android.util.Log
@@ -44,7 +45,6 @@ class QuickTileService : TileService() {
         super.onStopListening()
     }
 
-    @Suppress("DEPRECATION")
     override fun onClick() {
         super.onClick()
         val service = TranslatorAccessibilityService.instance
@@ -53,7 +53,18 @@ class QuickTileService : TileService() {
             val intent = Intent(this, MainActivity::class.java).apply {
                 addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             }
-            startActivityAndCollapse(intent)
+            // startActivityAndCollapse(Intent) is deprecated on API 34+ with a documented
+            // race against the shade-collapse animation; API 34+ added a PendingIntent
+            // variant. Branch accordingly. (Fresh-eyes review P1-10.)
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                val pi = android.app.PendingIntent.getActivity(
+                    this, 0, intent, android.app.PendingIntent.FLAG_IMMUTABLE
+                )
+                startActivityAndCollapse(pi)
+            } else {
+                @Suppress("DEPRECATION")
+                startActivityAndCollapse(intent)
+            }
             return
         }
         if (service.isOverlayShowing()) {
